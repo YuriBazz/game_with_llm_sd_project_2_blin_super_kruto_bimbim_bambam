@@ -1,0 +1,49 @@
+services:
+  game-service:
+    build: ./game-service
+    ports:
+      - "8080:8080"
+    networks:
+      - game-net
+
+  mcp-server:
+    build: ./mcp-server
+    depends_on:
+      - game-service
+    networks:
+      - game-net
+    stdin_open: true
+    tty: true
+
+  agent-runner:
+    build: ./agent-runner
+    depends_on:
+      - mcp-server
+      - ollama
+    environment:
+      - LLM_PROVIDER=mock
+      - GAME_SERVICE_URL=http://game-service:8080
+      - MAX_STEPS=10
+    networks:
+      - game-net
+    stdin_open: true
+    tty: true
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Исправленная команда
+    entrypoint: /bin/sh
+    command: -c "ollama serve & sleep 5 && ollama pull qwen2.5:0.5b && tail -f /dev/null"
+    networks:
+      - game-net
+
+networks:
+  game-net:
+    driver: bridge
+
+volumes:
+  ollama_data:

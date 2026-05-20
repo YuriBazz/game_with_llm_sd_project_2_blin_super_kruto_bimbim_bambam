@@ -66,4 +66,4 @@ flowchart TB
 
 ## MCP-контракт
 
-  Подроюно расписано в mcp-contract.md
+  Подробно расписано в mcp-contract.md

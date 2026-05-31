@@ -38,6 +38,7 @@ add_executable(game_service
         include/game_service/State.hpp
         include/game_service/entities/Player.hpp
         src/State.cpp
+        src/RandomGenerator.cpp
         include/game_service/RandomGenerator.hpp
         include/game_service/entities/Item.hpp
         include/game_service/entities/Loot.hpp

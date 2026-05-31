@@ -18,9 +18,8 @@ enum class TileType {
 
 void to_json(json& j, const TileType& t);
 void from_json(const json& j, TileType& t);
-
-[[nodiscard]] const char* tile_type_name(TileType t);
+const char* tile_type_name(TileType t);
 
 }
 
-#endif //GAME_SERVICE_TILETYPE_HPP
+#endif//GAME_SERVICE_TILETYPE_HPP

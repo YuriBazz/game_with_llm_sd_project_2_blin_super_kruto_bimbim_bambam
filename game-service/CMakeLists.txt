@@ -24,24 +24,13 @@ FetchContent_MakeAvailable(json)
 
 add_executable(game_service
         src/main.cpp
-        include/game_service/map/MapGenerator.hpp
         src/map/MapGenerator.cpp
-        include/game_service/map/MapOptions.hpp
         src/map/MapOptions.cpp
-        include/game_service/map/Rect.hpp
         src/map/Rect.cpp
-        include/game_service/map/TileType.hpp
         src/map/TileType.cpp
-        include/game_service/map/LevelMap.hpp
         src/map/LevelMap.cpp
-        include/game_service/entities/Enemy.hpp
-        include/game_service/State.hpp
-        include/game_service/entities/Player.hpp
         src/State.cpp
         src/RandomGenerator.cpp
-        include/game_service/RandomGenerator.hpp
-        include/game_service/entities/Item.hpp
-        include/game_service/entities/Loot.hpp
 )
 
 target_link_libraries(game_service PRIVATE httplib)

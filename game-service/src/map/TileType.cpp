@@ -5,9 +5,10 @@
 #include <game_service/map/TileType.hpp>
 
 namespace game {
-// Сериализация TileType (как целые числа для экономии места в JSON)
+
+// Сериализация TileType как целого числа
 void to_json(json& j, const TileType& t) {
-    j = t;
+    j = static_cast<int>(t);
 }
 
 void from_json(const json& j, TileType& t) {

@@ -2,7 +2,7 @@
 #include <nlohmann/json.hpp>
 #include <iostream>
 
-#include "../include/game_service/map/MapGenerator.hpp"
+#include "game_service/map/MapGenerator.hpp"
 #include "game_service/State.hpp"
 #include "game_service/map/MapOptions.hpp"
 

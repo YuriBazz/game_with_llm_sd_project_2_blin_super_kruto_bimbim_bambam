@@ -9,6 +9,7 @@ WORKDIR /app
 
 COPY CMakeLists.txt .
 COPY src/ ./src/
+COPY include/ ./include/
 
 RUN mkdir build && cd build && \
     cmake .. && \

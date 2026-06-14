@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roguelike Browser Client</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        background: #1a1a2e;
+        color: #e0e0e0;
+        font-family: 'Courier New', 'JetBrains Mono', 'Fira Code', monospace;
+        overflow: hidden;
+        height: 100vh;
+      }
+
+      #app {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+
+      #header {
+        background: #16213e;
+        padding: 12px 16px;
+        border-bottom: 2px solid #e94560;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      #title {
+        font-size: 20px;
+        font-weight: bold;
+        color: #e94560;
+      }
+
+      #newGameBtn {
+        background: #e94560;
+        color: #1a1a2e;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+        font-family: inherit;
+        transition: background 0.2s;
+      }
+
+      #newGameBtn:hover {
+        background: #ff6b7a;
+      }
+
+      #newGameBtn:active {
+        transform: scale(0.98);
+      }
+
+      #content {
+        display: flex;
+        flex: 1;
+        gap: 12px;
+        padding: 12px;
+      }
+
+      #gameContainer {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      #gameCanvas {
+        flex: 1;
+        background: #0f0f1e;
+        border: 2px solid #505060;
+        cursor: crosshair;
+        image-rendering: pixelated;
+      }
+
+      #sidebar {
+        width: 300px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      #hud {
+        background: #16213e;
+        padding: 12px;
+        border: 1px solid #505060;
+        border-radius: 4px;
+        font-size: 13px;
+        line-height: 1.6;
+        flex-shrink: 0;
+      }
+
+      #log {
+        background: #0f0f1e;
+        padding: 12px;
+        border: 1px solid #505060;
+        border-radius: 4px;
+        font-size: 11px;
+        line-height: 1.4;
+        flex: 1;
+        overflow-y: auto;
+      }
+
+      #overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(200, 0, 0, 0.8);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        z-index: 1000;
+      }
+
+      .message {
+        font-size: 48px;
+        font-weight: bold;
+        color: #ffffff;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+        animation: pulse 1s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.7;
+        }
+      }
+
+      /* Scrollbar styling */
+      #log::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      #log::-webkit-scrollbar-track {
+        background: #1a1a2e;
+      }
+
+      #log::-webkit-scrollbar-thumb {
+        background: #505060;
+        border-radius: 3px;
+      }
+
+      #log::-webkit-scrollbar-thumb:hover {
+        background: #707080;
+      }
+
+      /* Controls info */
+      #info {
+        background: #16213e;
+        padding: 12px;
+        border: 1px solid #505060;
+        border-radius: 4px;
+        font-size: 11px;
+        line-height: 1.6;
+        flex-shrink: 0;
+      }
+
+      #info div {
+        margin-bottom: 4px;
+      }
+
+      #info span {
+        color: #ffcc00;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="header">
+        <span id="title">Roguelike Browser Client</span>
+        <button id="newGameBtn">New Game</button>
+      </div>
+      <div id="content">
+        <div id="gameContainer">
+          <canvas id="gameCanvas"></canvas>
+        </div>
+        <div id="sidebar">
+          <div id="hud"></div>
+          <div id="info">
+            <div><span>WASD</span> / Arrows - Move</div>
+            <div><span>Space</span> / <span>G</span> - Pickup</div>
+            <div><span>Click Enemy</span> - Attack</div>
+            <div><span>Click Item</span> - Use</div>
+            <div style="border-top: 1px solid #505060; margin-top: 8px; padding-top: 8px;">
+              Fog of war shows visible area
+            </div>
+          </div>
+          <div id="log"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="overlay">
+      <div class="message"></div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -95,7 +95,7 @@ int main() {
         }
 
         std::cout << "Player HP: " << state["player"]["hp"] << std::endl;
-        std::cout << "Position: [" << state["player"]["pos"][0] << ", " << state["player"]["pos"][1] << "]" << std::endl;
+        std::cout << "Position: [" << state["player"]["x"] << ", " << state["player"]["y"] << "]" << std::endl;
 
         if (state.value("game_over", false)) {
             std::cout << "Game over!" << std::endl;

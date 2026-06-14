@@ -10,6 +10,9 @@ services:
     build: ./mcp-server
     depends_on:
       - game-service
+    environment:
+      - GAME_SERVICE_HOST=game-service
+      - GAME_SERVICE_PORT=8080
     networks:
       - game-net
     stdin_open: true

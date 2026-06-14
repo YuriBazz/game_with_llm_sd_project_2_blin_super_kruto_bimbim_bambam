@@ -50,9 +50,10 @@ flowchart LR
 
 - REST API по контракту из `mcp-contract.md`: `/api/state`, `/api/move`, `/api/attack`, `/api/pickup_item`, `/api/use_item`, `/api/visible_cells`, `/api/available_actions`, `POST/GET /api/map`, `/health`.
 - **Генерация карты:** BSP (Binary Space Partitioning) — комнаты, коридоры, seed.
-- **Боевая система:** атака по соседней клетке, урон 5, дроп лута, золото за убийство.
+- **Боевая система:** атака по соседней клетке, урон базовый 5, дроп лута, золото за убийство.
 - **Ходы:** `player_turn` → `enemy_turn` → `player_turn`; враги атакуют вплотную (2 урона) или идут к игроку в радиусе 6.
-- **Инвентарь:** подбор и использование зелий (+20 HP).
+- **Система лута:** 3 типа (Potion 40%, Sword 15%, Armor 35%), доступна только герою.
+- **Инвентарь:** подбор и использование предметов с пассивными и активными эффектами. **Пассивные:** Меч (+2 урона), Броня (+20% сопротивления, макс +66% всего). **Активные:** Зелья (+20 HP, потребляемые). Макс урона: +4.
 - **Fog of war:** круговая видимость в `get_visible_cells`.
 
 ### web-client
@@ -129,8 +130,7 @@ std::optional<std::string> chat(...) {
 | **Victory никогда не наступает** | `Phase::Victory` есть в enum, но нигде не выставляется. `won` всегда `false`. |
 | **`start_new_game` не сбрасывает состояние** | Не очищаются `enemies`, `dropped_loot`, `player.inventory`; `steps` не обнуляется. Повторный `POST /api/map` — накопление врагов и лута. |
 | **`steps` не инициализирован** | В конструкторе `State` поле `steps` не задано → UB при первом чтении. |
-| **Только 1 тип мобов** | Enum: Goblin/Orc/Troll, но спавнится только `EnemyType::Goblin`. |
-| **Меч бесполезен** | Дропается `sword`, но `use_item` обрабатывает только `potion`. |
+| **Меч бесполезен** | ❌ Удалено — `use_item` обрабатывает только активные эффекты (`active_effect == "heal"`); меч имеет пассивный эффект и работает автоматически. |
 | **LLM-враги** | Простой chase-AI, не LLM (расхождение с README). |
 | **Старт без карты** | До `POST /api/map` карта пустая (0×0), move/attack бессмысленны. |
 
@@ -157,7 +157,7 @@ std::optional<std::string> chat(...) {
 | Случайная карта | ✅ | BSP |
 | 3+ типа мобов | ❌ | Только goblin |
 | Боевая система | ✅ | Базовая |
-| Инвентарь | ⚠️ | Только potion |
+| **Инвентарь** | ✅ | Пассивные (меч, броня) + активные (зелья) с ограничениями (+4 урона, +66% сопротивления). |
 | MCP 5+ tools | ⚠️ | 7 tools, все stub |
 | Agent loop + LLM | ❌ | Нет |
 | LLM-враги | ❌ | Простой AI |
@@ -196,18 +196,19 @@ ce3d8ca first commit
 
 ### P1 — game-service
 
-6. `start_new_game`: clear `enemies`, `dropped_loot`, inventory, `steps = 0`.
-7. Инициализировать `steps` в конструкторе.
-8. Условие победы (выход / убить всех / дойти до комнаты).
-9. Спавн Orc/Troll с разным HP/уроном.
-10. `use_item` для `sword` (или убрать дроп).
+6. ✅ Система пассивных/активных предметов (завершено).
+7. ✅ Дроп 3 типов лута только для героя (завершено).
+8. `start_new_game`: clear `enemies`, `dropped_loot`, inventory, `steps = 0`.
+9. Инициализировать `steps` в конструкторе.
+10. Условие победы (выход / убить всех / дойти до комнаты).
+11. Спавн Orc/Troll с разным HP/уроном.
 
 ### P2 — качество
 
-11. Юнит-тесты (State, MapGenerator) — GoogleTest/Catch2.
-12. GitHub Actions: build + test.
-13. web-client в docker-compose или nginx static.
-14. Привести README к фактическому состоянию.
+12. Юнит-тесты (State, MapGenerator) — GoogleTest/Catch2.
+13. GitHub Actions: build + test.
+14. web-client в docker-compose или nginx static.
+15. Привести README к фактическому состоянию.
 
 ---
 

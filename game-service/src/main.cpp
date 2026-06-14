@@ -5,6 +5,7 @@
 #include "game_service/map/MapGenerator.hpp"
 #include "game_service/State.hpp"
 #include "game_service/map/MapOptions.hpp"
+#include "game_service/entities/Enemy.hpp"
 
 using json = nlohmann::json;
 
@@ -166,6 +167,168 @@ int main() {
         json payload = {
             {"success", result.success},
             {"items", result.items}
+        };
+        res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
+    });
+
+    // API для управления врагами
+    
+    // GET /api/enemies - получить список всех врагов
+    svr.Get("/api/enemies", [&state](const httplib::Request& req, httplib::Response& res) {
+        json payload = {
+            {"success", true},
+            {"enemies", state.get_enemies_state()}
+        };
+        res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
+    });
+
+    // POST /api/enemy/move - движение врага
+    // Ожидает: {"enemy_index": <int>, "direction": "up|down|left|right"}
+    svr.Post("/api/enemy/move", [&](const httplib::Request& req, httplib::Response& res) {
+        try {
+            const json body = json::parse(req.body);
+            int enemy_index = body.value("enemy_index", -1);
+            std::string direction = body.value("direction", "unknown");
+
+            int dx = 0;
+            int dy = 0;
+            get_dx_dy(direction, dx, dy);
+
+            game::MoveResult result;
+            if (dx != 0 || dy != 0) {
+                result = state.enemy_move(enemy_index, dx, dy);
+            }
+
+            json payload = {
+                {"success", result.success},
+                {"x", result.x},
+                {"y", result.y}
+            };
+            res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
+        } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"success": false, "error": "Invalid JSON"})", "application/json");
+        }
+    });
+
+    // POST /api/enemy/attack - атака врага
+    // Ожидает: {"enemy_index": <int>, "target_x": <int>, "target_y": <int>}
+    svr.Post("/api/enemy/attack", [&](const httplib::Request& req, httplib::Response& res) {
+        try {
+            const json body = json::parse(req.body);
+            int enemy_index = body.value("enemy_index", -1);
+            int target_x = body.value("target_x", 0);
+            int target_y = body.value("target_y", 0);
+
+            if (enemy_index < 0 || enemy_index >= (int)state.enemies.size()) {
+                res.status = 400;
+                res.set_content(R"({"success": false, "error": "Invalid enemy index"})", "application/json");
+                return;
+            }
+
+            const Enemy& enemy = state.enemies[enemy_index];
+            int dx = target_x - enemy.x;
+            int dy = target_y - enemy.y;
+
+            game::AttackResult result = state.enemy_attack(enemy_index, dx, dy);
+
+            json payload = {
+                {"success", result.success},
+                {"damage", result.damage},
+                {"target_dead", result.target_dead}
+            };
+            res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
+        } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"success": false, "error": "Invalid JSON"})", "application/json");
+        }
+    });
+
+    // GET /api/enemy/visible_cells - видимость врага
+    // Ожидает query param: ?enemy_index=<int>&radius=<int>
+    svr.Get("/api/enemy/visible_cells", [&state](const httplib::Request& req, httplib::Response& res) {
+        int enemy_index = -1;
+        int radius = 5;
+
+        if (req.has_param("enemy_index")) {
+            enemy_index = std::stoi(req.get_param_value("enemy_index"));
+        }
+        if (req.has_param("radius")) {
+            radius = std::stoi(req.get_param_value("radius"));
+        }
+
+        json payload = {
+            {"success", enemy_index >= 0 && enemy_index < (int)state.enemies.size()},
+            {"cells", state.get_enemy_visible_cells(enemy_index, radius)}
+        };
+        res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
+    });
+
+    // Real-Time Sync
+
+    // GET /api/update - обновить состояние и проверить условия победы
+    // Query param: ?current_time_ms=<int>
+    svr.Get("/api/update", [&state](const httplib::Request& req, httplib::Response& res) {
+        int current_time_ms = 0;
+        if (req.has_param("current_time_ms")) {
+            current_time_ms = std::stoi(req.get_param_value("current_time_ms"));
+        }
+
+        state.update(current_time_ms);
+
+        json payload = {
+            {"success", true},
+            {"game_state", state.state}
+        };
+        res.set_content(with_state(payload, state, true).dump(), "application/json");
+    });
+
+    // GET /api/player/ready - проверить готовность игрока к действию
+    // Query param: ?current_time_ms=<int>
+    // Возвращает: {"ready": true/false, "time_to_action_ms": <int>}
+    svr.Get("/api/player/ready", [&state](const httplib::Request& req, httplib::Response& res) {
+        int current_time_ms = 0;
+        if (req.has_param("current_time_ms")) {
+            current_time_ms = std::stoi(req.get_param_value("current_time_ms"));
+        }
+
+        bool is_ready = state.is_player_action_resolved(current_time_ms);
+        int time_to_action = state.action_duration_ms - (current_time_ms - state.player_last_action_time);
+        if (time_to_action < 0) time_to_action = 0;
+
+        json payload = {
+            {"ready", is_ready},
+            {"time_to_action_ms", time_to_action}
+        };
+        res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
+    });
+
+    // GET /api/enemy/ready - проверить готовность врага к действию
+    // Query params: ?enemy_index=<int>&current_time_ms=<int>
+    svr.Get("/api/enemy/ready", [&state](const httplib::Request& req, httplib::Response& res) {
+        int enemy_index = -1;
+        int current_time_ms = 0;
+
+        if (req.has_param("enemy_index")) {
+            enemy_index = std::stoi(req.get_param_value("enemy_index"));
+        }
+        if (req.has_param("current_time_ms")) {
+            current_time_ms = std::stoi(req.get_param_value("current_time_ms"));
+        }
+
+        if (enemy_index < 0 || enemy_index >= (int)state.enemies.size()) {
+            res.status = 400;
+            res.set_content(R"({"success": false, "error": "Invalid enemy index"})", "application/json");
+            return;
+        }
+
+        bool is_ready = state.is_enemy_action_resolved(enemy_index, current_time_ms);
+        int time_to_action = state.action_duration_ms - (current_time_ms - state.enemy_last_action_times[enemy_index]);
+        if (time_to_action < 0) time_to_action = 0;
+
+        json payload = {
+            {"ready", is_ready},
+            {"time_to_action_ms", time_to_action}
         };
         res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
     });

@@ -158,26 +158,27 @@ AttackResult State::attack(int dx, int dy) {
     if (target->hp <= 0) {
         result.target_dead = true;
 
-        int chance = rng.get_random(0, 100);
+        // Дроп лута с точным распределением: 40% Potion, 15% Sword, 35% Armor, 10% Nothing
+        int chance = rng.get_random(1, 100);
 
-        if (chance < 40) {
-            // Зелье восстановления (активный эффект)
+        if (chance <= 40) {
+            // Зелье восстановления (40%)
             Item potion{
                 "potion", "Health Potion", "consumable", 1,
                 0, 0,  // no passive
                 "heal", kPotionHeal  // active: heal +20
             };
             drop_loot(target->x, target->y, potion);
-        } else if (chance > 85) {
-            // Меч (пассивный бонус урона: +2)
+        } else if (chance <= 55) {
+            // Меч (15%)
             Item sword{
                 "sword", "Iron Sword", "weapon", 1,
                 2, 0,  // passive: +2 damage
                 "", 0  // no active
             };
             drop_loot(target->x, target->y, sword);
-        } else if (chance > 50) {
-            // Броня (пассивный бонус сопротивления: +20%)
+        } else if (chance <= 90) {
+            // Броня (35%)
             Item armor{
                 "armor", "Steel Armor", "armor", 1,
                 0, 20,  // passive: +20% resistance
@@ -185,6 +186,7 @@ AttackResult State::attack(int dx, int dy) {
             };
             drop_loot(target->x, target->y, armor);
         }
+        // else: 10% (91-100) - ничего (no loot)
 
         entity_grid[target->y * map.width + target->x] = -1;
         

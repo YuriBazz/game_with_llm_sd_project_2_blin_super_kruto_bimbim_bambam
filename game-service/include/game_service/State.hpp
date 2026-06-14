@@ -65,7 +65,7 @@ public:
     LevelMap map;
     Player player;
     Phase phase;
-    int steps;
+    int steps{};
 
     utils::RandomGenerator& rng;
 
@@ -78,7 +78,7 @@ public:
     State(utils::RandomGenerator& rng);
 
     // Инициализация новой игры
-    void start_new_game(MapOptions options);
+    void start_new_game(const MapOptions &options);
 
     MoveResult move(int dx, int dy);
     AttackResult attack(int dx, int dy);

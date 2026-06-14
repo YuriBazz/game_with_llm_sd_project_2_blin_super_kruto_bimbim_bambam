@@ -45,9 +45,10 @@ void State::drop_loot(int x, int y, const Item &item) {
     dropped_loot.push_back({next_loot_id++, x, y, item});
 }
 
-State::State(utils::RandomGenerator& rng) : player{0, 0, 0, 0, 0}, phase(Phase::PlayerTurn), rng{rng} {}
+State::State(utils::RandomGenerator& rng) : map(), player{0, 0, 0, 0, 0}, phase(Phase::PlayerTurn), rng{rng} {
+}
 
-void State::start_new_game(MapOptions options) {
+void State::start_new_game(const MapOptions &options) {
     MapGenerator generator(rng);
     map = generator.generate_map(options);
 
@@ -78,7 +79,7 @@ void State::start_new_game(MapOptions options) {
 
             // Проверяем по сетке: если там уже кто-то есть или это стена — пропускаем
             if (map.grid[idx] == TileType::Floor && entity_grid[idx] == -1) {
-                Enemy enemy{enemy_id_counter, enemy_x, enemy_y, 10, EnemyType::Goblin};
+                Enemy enemy{enemy_id_counter, enemy_x, enemy_y, 10, rng.get_random_enum<EnemyType>()};
 
                 enemies.push_back(enemy);
                 entity_grid[idx] = enemy_id_counter; // Заняли клетку на карте врагов
@@ -107,7 +108,7 @@ void State::process_enemy_turn() {
     if (phase != Phase::EnemyTurn) return;
 
     for (size_t i = 0; i < enemies.size(); ++i) {
-        auto& enemy = enemies[i];
+        const auto& enemy = enemies[i];
 
         // Считаем расстояние до игрока (Манхэттенское расстояние)
         int dist_x = player.x - enemy.x;

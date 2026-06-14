@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(game_service)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
@@ -31,6 +31,8 @@ add_executable(game_service
         src/map/LevelMap.cpp
         src/State.cpp
         src/RandomGenerator.cpp
+        include/game_service/magic_enum.hpp
+        include/concepts.hpp
 )
 
 target_link_libraries(game_service PRIVATE httplib)

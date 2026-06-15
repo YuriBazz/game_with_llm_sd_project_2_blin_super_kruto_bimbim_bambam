@@ -5,7 +5,6 @@ import type {
   VisibleCell,
   MoveResponse,
   AttackResponse,
-  PickupResponse,
   UseItemResponse,
   VisibleCellsResponse,
   ActionsResponse,
@@ -41,11 +40,12 @@ export class GameClient {
 
   async newGame(options?: Partial<MapOptions>): Promise<GameState> {
     const body: MapOptions = {
-      map_width: options?.map_width ?? 50,
-      map_height: options?.map_height ?? 50,
-      min_node_size: options?.min_node_size ?? 10,
-      max_depth: options?.max_depth ?? 4,
+      map_width: options?.map_width ?? 48,
+      map_height: options?.map_height ?? 48,
+      min_node_size: options?.min_node_size ?? 12,
+      max_depth: options?.max_depth ?? 5,
       seed: options?.seed ?? 0,
+      mode: options?.mode ?? 'start',
     };
 
     const response = await this.fetch<ActionResponse>('/api/map', {
@@ -68,6 +68,18 @@ export class GameClient {
     return this.fetch<GameState>('/api/state');
   }
 
+  async tick(): Promise<GameState> {
+    const response = await this.fetch<ActionResponse>('/api/tick', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!response.state) {
+      throw new Error('No state in tick response');
+    }
+    return response.state;
+  }
+
   async move(direction: 'up' | 'down' | 'left' | 'right'): Promise<MoveResponse> {
     return this.fetch<MoveResponse>('/api/move', {
       method: 'POST',
@@ -81,13 +93,6 @@ export class GameClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target_x: targetX, target_y: targetY }),
-    });
-  }
-
-  async pickupItem(): Promise<PickupResponse> {
-    return this.fetch<PickupResponse>('/api/pickup_item', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
     });
   }
 

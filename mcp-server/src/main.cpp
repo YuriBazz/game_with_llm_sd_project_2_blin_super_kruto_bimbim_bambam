@@ -81,8 +81,10 @@ public:
         }
     }
     
+    static constexpr const char* kAgentSlot = "rival";
+
     json move(const std::string& direction) {
-        json body = {{"direction", direction}};
+        json body = {{"direction", direction}, {"slot", kAgentSlot}};
         std::string response = make_request("POST", "/api/move", body.dump(), true);
         if (response.empty()) {
             return {{"success", false}, {"error", "Failed to move"}};
@@ -95,7 +97,7 @@ public:
     }
     
     json attack(int target_x, int target_y) {
-        json body = {{"target_x", target_x}, {"target_y", target_y}};
+        json body = {{"target_x", target_x}, {"target_y", target_y}, {"slot", kAgentSlot}};
         std::string response = make_request("POST", "/api/attack", body.dump(), true);
         if (response.empty()) {
             return {{"success", false}, {"error", "Failed to attack"}};
@@ -108,7 +110,8 @@ public:
     }
     
     json get_visible_cells(int radius = 5) {
-        std::string path = "/api/visible_cells?radius=" + std::to_string(radius);
+        std::string path = "/api/visible_cells?radius=" + std::to_string(radius) +
+                           "&slot=" + kAgentSlot;
         std::string response = make_request("GET", path);
         if (response.empty()) {
             return {{"success", false}, {"error", "Failed to get visible cells"}};
@@ -120,20 +123,8 @@ public:
         }
     }
     
-    json pickup_item() {
-        std::string response = make_request("POST", "/api/pickup_item", "", true);
-        if (response.empty()) {
-            return {{"success", false}, {"error", "Failed to pickup item"}};
-        }
-        try {
-            return json::parse(response);
-        } catch (...) {
-            return {{"success", false}, {"error", "Failed to parse pickup response"}};
-        }
-    }
-    
     json use_item(const std::string& item_id) {
-        json body = {{"item_id", item_id}};
+        json body = {{"item_id", item_id}, {"slot", kAgentSlot}};
         std::string response = make_request("POST", "/api/use_item", body.dump(), true);
         if (response.empty()) {
             return {{"success", false}, {"error", "Failed to use item"}};
@@ -145,8 +136,35 @@ public:
         }
     }
     
+    json scout_around(const json& args = json::object()) {
+        std::string path = std::string("/api/scout_around?slot=") + kAgentSlot;
+        if (args.contains("entry_corridor") && args["entry_corridor"].is_number_integer()) {
+            path += "&entry_corridor=" + std::to_string(args["entry_corridor"].get<int>());
+        }
+        if (args.contains("blocked_corridors") && args["blocked_corridors"].is_array()) {
+            std::string blocked;
+            for (const auto& item : args["blocked_corridors"]) {
+                if (!item.is_number_integer()) continue;
+                if (!blocked.empty()) blocked += ',';
+                blocked += std::to_string(item.get<int>());
+            }
+            if (!blocked.empty()) {
+                path += "&blocked=" + blocked;
+            }
+        }
+        std::string response = make_request("GET", path);
+        if (response.empty()) {
+            return {{"success", false}, {"error", "Failed to scout around"}};
+        }
+        try {
+            return json::parse(response);
+        } catch (...) {
+            return {{"success", false}, {"error", "Failed to parse scout_around response"}};
+        }
+    }
+
     json get_available_actions() {
-        std::string response = make_request("GET", "/api/available_actions");
+        std::string response = make_request("GET", "/api/available_actions?slot=rival");
         if (response.empty()) {
             return {{"success", false}, {"error", "Failed to get available actions"}};
         }
@@ -156,7 +174,49 @@ public:
             return {{"success", false}, {"error", "Failed to parse available actions response"}};
         }
     }
+
+    json new_game(const json& options = json::object()) {
+        json body = options;
+        if (body.empty()) {
+            body = {
+                {"map_width", 48},
+                {"map_height", 48},
+                {"min_node_size", 10},
+                {"max_depth", 4},
+                {"seed", 0}
+            };
+        }
+        std::string response = make_request("POST", "/api/map", body.dump(), true);
+        if (response.empty()) {
+            return {{"success", false}, {"error", "Failed to start new game"}};
+        }
+        try {
+            return json::parse(response);
+        } catch (...) {
+            return {{"success", false}, {"error", "Failed to parse new game response"}};
+        }
+    }
 };
+
+bool has_required_string(const json& args, const std::string& key, std::string& out) {
+    if (!args.contains(key) || !args[key].is_string()) {
+        return false;
+    }
+    out = args[key].get<std::string>();
+    return true;
+}
+
+bool has_required_int(const json& args, const std::string& key, int& out) {
+    if (!args.contains(key) || !args[key].is_number_integer()) {
+        return false;
+    }
+    out = args[key].get<int>();
+    return true;
+}
+
+json validation_error(const std::string& message) {
+    return {{"success", false}, {"error", message}};
+}
 
 int main() {
     mcp::McpServer server("roguelike-mcp", "1.0.0");
@@ -169,43 +229,59 @@ int main() {
             return client.get_state();
         });
 
+    server.register_tool("new_game",
+        "Start a new game with optional map options",
+        {{"type", "object"}, {"properties", {
+            {"map_width", {{"type", "integer"}, {"minimum", 10}}},
+            {"map_height", {{"type", "integer"}, {"minimum", 10}}},
+            {"min_node_size", {{"type", "integer"}, {"minimum", 4}}},
+            {"max_depth", {{"type", "integer"}, {"minimum", 1}}},
+            {"seed", {{"type", "integer"}, {"minimum", 0}}}
+        }}},
+        [&client](const json& args) -> json {
+            return client.new_game(args);
+        });
+
     server.register_tool("move",
         "Move player in specified direction",
         {{"type", "object"}, {"properties", {
             {"direction", {{"type", "string"}, {"enum", {"up", "down", "left", "right"}}}}
         }}, {"required", {"direction"}}},
         [&client](const json& args) -> json {
-            std::string dir = args["direction"];
+            std::string dir;
+            if (!has_required_string(args, "direction", dir)) {
+                return validation_error("Missing or invalid required argument: direction");
+            }
+            if (dir != "up" && dir != "down" && dir != "left" && dir != "right") {
+                return validation_error("direction must be one of: up, down, left, right");
+            }
             return client.move(dir);
         });
 
     server.register_tool("attack",
         "Attack monster at coordinates",
         {{"type", "object"}, {"properties", {
-            {"target_x", {{"type", "integer"}, {"minimum", 0}, {"maximum", 19}}},
-            {"target_y", {{"type", "integer"}, {"minimum", 0}, {"maximum", 19}}}
+            {"target_x", {{"type", "integer"}, {"minimum", 0}}},
+            {"target_y", {{"type", "integer"}, {"minimum", 0}}}
         }}, {"required", {"target_x", "target_y"}}},
         [&client](const json& args) -> json {
-            int target_x = args["target_x"];
-            int target_y = args["target_y"];
+            int target_x = 0;
+            int target_y = 0;
+            if (!has_required_int(args, "target_x", target_x) ||
+                !has_required_int(args, "target_y", target_y)) {
+                return validation_error("Missing or invalid required arguments: target_x, target_y");
+            }
             return client.attack(target_x, target_y);
         });
 
-    server.register_tool("get_visible_cells",
-        "Get visible cells within radius from player",
+    server.register_tool("scout_around",
+        "Look around: reveal current room (full) + nearby corridors, cache BFS paths to exits",
         {{"type", "object"}, {"properties", {
-            {"radius", {{"type", "integer"}, {"default", 5}, {"minimum", 1}, {"maximum", 10}}}
+            {"entry_corridor", {{"type", "integer"}}},
+            {"blocked_corridors", {{"type", "array"}, {"items", {{"type", "integer"}}}}}
         }}},
         [&client](const json& args) -> json {
-            int radius = args.value("radius", 5);
-            return client.get_visible_cells(radius);
-        });
-
-    server.register_tool("pickup_item",
-        "Pick up item from current cell",
-        {{"type", "object"}, {"properties", json::object()}},
-        [&client](const json&) -> json {
-            return client.pickup_item();
+            return client.scout_around(args);
         });
 
     server.register_tool("use_item",
@@ -215,7 +291,10 @@ int main() {
             {"target", {{"type", "string"}, {"optional", true}}}
         }}, {"required", {"item_id"}}},
         [&client](const json& args) -> json {
-            std::string item_id = args["item_id"];
+            std::string item_id;
+            if (!has_required_string(args, "item_id", item_id)) {
+                return validation_error("Missing or invalid required argument: item_id");
+            }
             return client.use_item(item_id);
         });
 

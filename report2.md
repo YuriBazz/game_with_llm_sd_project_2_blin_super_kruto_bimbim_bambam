@@ -378,41 +378,117 @@ docker compose run --rm --no-deps agent-runner
 
 ## 9. Приоритетный план (до защиты)
 
-### P0 — блокеры защиты
+### ✅ Выполнено (14.06.2026)
 
-1. **Унифицировать JSON state** — либо вернуть `phase`/`game_over`/`won` в `to_json`, либо обновить `mcp-contract.md`, web-client, agent-runner на `game_state`
-2. **agent-runner → stdio MCP** — убрать прямой HTTP (устранить антипаттерн)
-3. **Agent loop:** state → LLM → tool call → repeat; реализовать Ollama + второй провайдер
-4. **MCP:** tool `new_game`, валидация args без crash
-5. **docker-compose:** связать agent-runner | mcp-server через pipe/supervisor; добавить web-client
+1. **JSON state унифицирован** — `to_json` добавляет `phase`, `game_over`, `won` + `game_state`
+2. **web-client** — helpers `isPlayable/isVictory/isDefeat`, nginx proxy, Dockerfile
+3. **MCP** — tool `new_game`, валидация args, 8 tools total
+4. **agent-runner** — fork/spawn MCP stdio, LLM loop (mock/ollama/openai), логирование
+5. **docker-compose** — web-client :5173, agent-runner bundles mcp_server, healthchecks
+6. **Enemy stats** — goblin 8/2, orc 15/4, troll 25/6
+7. **enemy_llm_agent.py** — LLM/FakeLLM для troll через HTTP enemy API
+8. **eval/run_eval.sh** + results.md, **state_test**, **CI workflow**, GoF в README
 
-### P1 — требования курса
+### P1 — осталось до полного соответствия hw2
 
-6. LLM enemy agent (минимум 1 тип моба) через tool use
-7. Разное поведение/статы goblin/orc/troll
-8. GoF: описать 3 паттерна в README с file:line
-9. `eval/run_eval.sh` + 2 агента × 5+ seeds → `eval/results.md`
-10. Юнит-тесты + GitHub Actions CI
+1. **Второй агент для сравнения** — greedy/heuristic runner или `AGENT_STRATEGY=greedy`
+2. **Улучшить mock LLM** — целенаправленный pathfinding, focus attack (см. §12)
+3. **Интеграционный тест agent loop** с FakeLLM (C++ или pytest)
+4. **Уровни (levels)** — или явное обоснование упрощения в README
+5. **Запустить eval с ollama** — 5+ прогонов × 2 агента, обновить `eval/results.md` с графиками
+6. **Исправления по логам `logs/logs.log`** — re-loop, Ollama race, mock-бой, `--no-cache` rebuild (§12)
 
-### P2 — качество
+### P2 — polish
 
-11. README: фактическое состояние, AI usage disclosure
-12. FakeLLM тесты agent loop
-13. Уровни (levels) или обоснование упрощения
+6. Real-time enemy AI в game-service (сейчас через external agent)
+7. Коридоры в web-client renderer
+8. Agent-runner token budget (`MAX_TOKENS` enforcement)
+
+---
+
+## 12. Анализ runtime-логов (`logs/logs.log`, 14.06.2026)
+
+**Источник:** `./scripts/compose-up.sh --godmode --build --log=./logs/logs.log`  
+**Конфиг:** GODMODE, карта 72×72, `MAX_STEPS=100`, `LLM_PROVIDER=ollama` (по логам Ollama), agent-runner + ollama + web-client.
+
+### 12.1. Краткий вывод
+
+Агент **не играет настоящей LLM** в этом прогоне: Ollama отвечает 404, после чего включается **mock навсегда**. Mock за ~3 секунды сжигает 100 шагов, **сразу начинает новую «сессию»** на той же игре (40+ циклов подряд), бьёт врагов 3 раза и **убегает**, зелья не использует, застревает в ping-pong у стены. Docker **не пересобрал** agent-runner (слой `CACHED`).
+
+### 12.2. Наблюдения из лога
+
+| # | Симптом | Доказательство в логе | Причина |
+|---|---------|----------------------|---------|
+| 1 | LLM не участвует | `POST /api/chat` → **404** ×3 → `Falling back to mock LLM` | Модель не готова к Step 0 **или** race с `ollama pull`; после fallback `provider_` навсегда `mock` |
+| 2 | Старый код agent-runner | `#38 agent-builder RUN cmake --build .` **CACHED**, `#43 COPY agent_runner` **CACHED** | Изменения в `llm_client.hpp` / `main.cpp` не попали в образ без `--no-cache` |
+| 3 | Спам ходов | Step 0 @ 14:43:08 → Step 99 @ 14:43:11 → `Game session started` снова @ 14:43:13 (**40+ раз**) | После `MAX_STEPS` агент ждёт 2 с и снова `wait_for_start_game()`; игра ещё `session_active` → re-loop |
+| 4 | Бой: удар → бегство | Steps 2–4: `attack` ×3, step 5+: только `move`; HP 42→22→18→10 | Mock не держит focus; realtime: −20 HP за ход от волн |
+| 5 | Нет лечения | **0** вызовов `use_item` | У AI, вероятно, **нет potion** в инвентаре |
+| 6 | Ping-pong у стены | Steps 18–99: `[61–67, 55–56]`, `up`/`left`/`right`/`down` | Greedy без backtrack / блокировки врагов (фиксы в коде, образ CACHED) |
+| 7 | Лимит шагов | `Max steps per round: 100` | Мало для 72×72 и 15 kills |
+
+**Пример первого раунда (mock):**
+
+```
+Step 0  HP 42  [68,68]  move up        (Ollama fail)
+Step 1  HP 22  [68,67]  move left      (−20 HP от врагов)
+Step 2  HP 18  [67,67]  attack (67,68)
+Step 3  HP 14  [67,67]  attack (67,68)
+Step 4  HP 10  [67,67]  attack (67,68)
+Step 5–99       move only (0 kills)
+```
+
+### 12.3. План правок
+
+#### Критично (P0)
+
+| ID | Проблема | Правка | Где |
+|----|----------|--------|-----|
+| L1 | Re-loop после 100 steps | Ждать конца сессии или нового Start Game, не перезапускать на активной игре | `agent-runner/src/main.cpp` |
+| L2 | Ollama 404 + permanent mock | Ждать готовности модели; не переключать `provider_` на mock навсегда | `llm_client.hpp`, compose healthcheck ollama |
+| L3 | Docker CACHED | `docker compose build --no-cache agent-runner` после правок | README / compose-up |
+
+#### Важно (P1)
+
+| ID | Проблема | Правка | Где |
+|----|----------|--------|-----|
+| L4 | Mock убегает после боя | `attack` каждый ход при adjacent enemies, focus lowest HP | `llm_client.hpp` |
+| L5 | Нет potion | Стартовое зелье AI; `use_item` при `hp < 25%` | `State.cpp`, mock |
+| L6 | MAX_STEPS мало | `MAX_STEPS=500` в compose | `docker-compose.yml` |
+| L7 | Ping-pong / стены | Backtrack ban, BFS, блок клеток врагов | `llm_client.hpp` (rebuild) |
+
+#### Уже в коде (нужен rebuild)
+
+- `--log=path` в `scripts/compose-up.sh`
+- Карта 72×72, cap врагов снижен
+- GODMODE: AI не бьёт human; web-client без лишних `visible_cells` в godmode
+- Prompt: multi-hit, враги блокируют клетки
+- Anti-stuck, ping-pong, enemy blocking в pathfinding
+
+### 12.4. Команды для повторной проверки
+
+```bash
+docker compose build --no-cache agent-runner game-service
+./scripts/compose-up.sh --godmode --build --log=./logs/logs.log
+LLM_PROVIDER=mock ./scripts/compose-up.sh --godmode --build
+docker compose exec ollama ollama list
+```
+
+**Критерий успеха:** один `Game session started` на Start Game; нет вечного mock-fallback после готовности Ollama; `attack` при соседних врагах; нет ping-pong на одних координатах.
 
 ---
 
 ## 10. Итоговая таблица баллов (ориентировочно)
 
-| Блок | Max (условно) | Факт | % |
-|------|---------------|------|---|
-| Игра | 20 | 12 | 60% |
-| Архитектура | 15 | 5 | 33% |
-| GoF | 10 | 0 | 0% |
-| AI / MCP | 25 | 4 | 16% |
-| Eval / agents | 15 | 0 | 0% |
-| Качество | 15 | 2 | 13% |
-| **Итого** | **100** | **~23** | **~23%** |
+| Блок | Max (условно) | Было | Сейчас | % |
+|------|---------------|------|--------|---|
+| Игра | 20 | 12 | 15 | 75% |
+| Архитектура | 15 | 5 | 11 | 73% |
+| GoF | 10 | 0 | 6 | 60% |
+| AI / MCP | 25 | 4 | 14 | 56% |
+| Eval / agents | 15 | 0 | 5 | 33% |
+| Качество | 15 | 2 | 8 | 53% |
+| **Итого** | **100** | **~23** | **~59** | **~59%** |
 
 *Оценка ориентировочная; реальная оценка преподавателя может отличаться.*
 
@@ -422,11 +498,11 @@ docker compose run --rm --no-deps agent-runner
 
 **Сильные стороны:** `game-service` — работоспособное ядро roguelike с генерацией карты, боем, инвентарём, real-time API для двух агентов. `mcp-server` после доработки проксирует tools на бэкенд. Часть багов из первого аудита (`report.md`) исправлена.
 
-**Главный разрыв:** проект описывает и частично реализует **две несовместимые архитектуры** — turn-based (контракт, web-client) и real-time (код game-service). AI-блок (MCP agent loop, LLM, eval) **не доведён до рабочего состояния**. Для защиты критично: синхронизировать контракты, починить web-client, связать agent-runner с MCP и LLM, добавить eval.
+**Главный разрыв:** проект описывает и частично реализует **две несовместимые архитектуры** — turn-based (контракт, web-client) и real-time (код game-service). AI-блок (MCP agent loop, LLM, eval) **улучшен**, но runtime-логи (§12) показывают: Ollama race, re-loop agent-runner и слабый mock всё ещё ломают demo.
 
 **Минимальный demo для защиты (если мало времени):**
 1. Fix JSON schema + web-client input
-2. agent-runner через MCP + mock LLM agent loop
-3. Один eval-прогон с логами
+2. agent-runner через MCP + mock LLM agent loop (**+ правки §12 L1, L4, rebuild --no-cache**)
+3. Один eval-прогон с логами (`--log=./logs/run.log`)
 
 Полноценное соответствие hw2_task.pdf потребует существенной доработки AI-блока и инфраструктуры качества.

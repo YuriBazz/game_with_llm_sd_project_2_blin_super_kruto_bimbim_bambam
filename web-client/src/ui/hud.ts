@@ -50,15 +50,17 @@ export class HUD {
     gold: number,
     phase: string,
     steps: number,
-    inventory: Array<{ id: string; name: string; count: number }>
+    inventory: Array<{ id: string; name: string; count: number }>,
+    levelInfo?: { level: number; playerKills: number; rivalKills: number; killsRequired: number },
+    playerInfo?: { respawns: number },
+    rivalInfo?: { hp: number; maxHp: number; respawns: number }
   ): void {
     this.container.innerHTML = '';
 
-    // Player stats
     const statsDiv = document.createElement('div');
     statsDiv.style.marginBottom = '12px';
     statsDiv.innerHTML = `
-      <div style="color: #ff6b6b; font-weight: bold;">Player</div>
+      <div style="color: #ff6b6b; font-weight: bold;">Human (H)</div>
       <div style="color: #888; margin-top: 4px;">
         HP: <span style="color: #4da6ff;">${hp}/${maxHp}</span>
       </div>
@@ -69,8 +71,24 @@ export class HUD {
         Steps: <span style="color: #4da6ff;">${steps}</span>
       </div>
       <div style="color: #888;">
-        Phase: <span style="color: ${phase === 'player_turn' ? '#00dd00' : '#ff6b6b'}">${phase}</span>
+        Phase: <span style="color: ${phase === 'Realtime' || phase === 'player_turn' ? '#00dd00' : '#ff6b6b'}">${phase}</span>
       </div>
+      ${levelInfo ? `
+      <div style="color: #888; margin-top: 6px; border-top: 1px solid #505060; padding-top: 6px;">
+        Level: <span style="color: #e94560;">${levelInfo.level}</span><br>
+        H kills: <span style="color: #4da6ff;">${levelInfo.playerKills}/${levelInfo.killsRequired}</span><br>
+        A kills: <span style="color: #00dd88;">${levelInfo.rivalKills}/${levelInfo.killsRequired}</span><br>
+      </div>` : ''}
+      ${playerInfo ? `
+      <div style="color: #888; margin-top: 6px; border-top: 1px solid #505060; padding-top: 6px;">
+        H respawns: <span style="color: #4da6ff;">${playerInfo.respawns}</span>
+      </div>` : ''}
+      ${rivalInfo ? `
+      <div style="color: #888; margin-top: 6px; border-top: 1px solid #505060; padding-top: 6px;">
+        <div style="color: #00dd88; font-weight: bold;">Agent (A)</div>
+        HP: <span style="color: #00dd88;">${rivalInfo.hp}/${rivalInfo.maxHp}</span><br>
+        Respawns: <span style="color: #00dd88;">${rivalInfo.respawns}</span>
+      </div>` : ''}
     `;
     this.container.appendChild(statsDiv);
 

@@ -32,6 +32,18 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      #godModeBanner {
+        display: none;
+        background: #7b2cbf;
+        color: #fff;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
       }
 
       #title {
@@ -124,6 +136,85 @@
         z-index: 1000;
       }
 
+      #startOverlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 15, 30, 0.95);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        z-index: 1100;
+        gap: 24px;
+      }
+
+      #startOverlay h1 {
+        color: #e94560;
+        font-size: 36px;
+      }
+
+      #startOverlay p {
+        color: #aaa;
+        max-width: 480px;
+        text-align: center;
+        line-height: 1.6;
+      }
+
+      #startGameBtn {
+        background: #e94560;
+        color: #fff;
+        border: none;
+        padding: 16px 48px;
+        font-size: 20px;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+
+      #startGameBtn:hover {
+        background: #ff6b7a;
+      }
+
+      #levelCompleteOverlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 120, 80, 0.92);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        z-index: 1200;
+        gap: 20px;
+      }
+
+      #levelCompleteOverlay h2 {
+        color: #fff;
+        font-size: 42px;
+      }
+
+      .level-actions {
+        display: flex;
+        gap: 16px;
+      }
+
+      .level-actions button {
+        background: #16213e;
+        color: #fff;
+        border: 2px solid #e94560;
+        padding: 12px 28px;
+        font-size: 16px;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+
+      .level-actions button:hover {
+        background: #e94560;
+        color: #fff;
+      }
+
       .message {
         font-size: 48px;
         font-weight: bold;
@@ -184,6 +275,7 @@
     <div id="app">
       <div id="header">
         <span id="title">Roguelike Browser Client</span>
+        <span id="godModeBanner">GOD MODE — spectator noclip</span>
         <button id="newGameBtn">New Game</button>
       </div>
       <div id="content">
@@ -193,16 +285,35 @@
         <div id="sidebar">
           <div id="hud"></div>
           <div id="info">
-            <div><span>WASD</span> / Arrows - Move</div>
-            <div><span>Space</span> / <span>G</span> - Pickup</div>
-            <div><span>Click Enemy</span> - Attack</div>
-            <div><span>Click Item</span> - Use</div>
+            <div><span>WASD</span> / Arrows — Move</div>
+            <div><span>Space</span> — Attack &nbsp;|&nbsp; <span>G</span> — Pickup</div>
+            <div><span>H</span> — You &nbsp;|&nbsp; <span>A</span> — LLM ally/rival</div>
+            <div><span>Click adjacent</span> — Move / attack</div>
             <div style="border-top: 1px solid #505060; margin-top: 8px; padding-top: 8px;">
-              Fog of war shows visible area
+              Fog of war reveals the whole room you're in
             </div>
           </div>
           <div id="log"></div>
         </div>
+      </div>
+    </div>
+
+    <div id="startOverlay">
+      <h1>Roguelike</h1>
+      <p>
+        You (H) and the LLM (A) spawn on opposite sides of the map.<br>
+        First to reach the kill quota wins the level. PvP steals half of victim's kills (rounded up).<br>
+        Both have respawns. Rare drops: Extra Life (+1 respawn). Press Start when ready.
+      </p>
+      <button id="startGameBtn">Start Game</button>
+    </div>
+
+    <div id="levelCompleteOverlay">
+      <h2>Level Complete!</h2>
+      <p id="levelCompleteMessage" style="color: #ddd; font-size: 18px;">First to kill quota wins.</p>
+      <div class="level-actions">
+        <button id="levelNewGameBtn">New Game</button>
+        <button id="nextLevelBtn">Next Level</button>
       </div>
     </div>
 

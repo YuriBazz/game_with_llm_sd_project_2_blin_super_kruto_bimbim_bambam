@@ -9,7 +9,7 @@ find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-add_executable(agent_runner src/main.cpp src/llm_client.hpp)
+add_executable(agent_runner src/main.cpp src/llm_client.hpp src/mcp_client.hpp)
 
 target_link_libraries(agent_runner PRIVATE
     Threads::Threads

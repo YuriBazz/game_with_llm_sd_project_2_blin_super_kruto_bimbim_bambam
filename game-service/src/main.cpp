@@ -1,6 +1,8 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <iostream>
+#include <cstdlib>
+#include <cstring>
 
 #include "game_service/map/MapGenerator.hpp"
 #include "game_service/State.hpp"
@@ -34,6 +36,26 @@ void get_dx_dy(const std::string& dir, int& dx, int& dy) {
     else if (dir == "right") dx = 1;
 }
 
+bool env_god_mode_enabled() {
+    const char* value = std::getenv("GODMODE");
+    if (!value) return false;
+    return std::strcmp(value, "1") == 0 ||
+           std::strcmp(value, "true") == 0 ||
+           std::strcmp(value, "TRUE") == 0 ||
+           std::strcmp(value, "yes") == 0 ||
+           std::strcmp(value, "YES") == 0;
+}
+
+std::string action_slot_from(const httplib::Request& req, const json& body) {
+    if (body.contains("slot") && body["slot"].is_string()) {
+        return body["slot"].get<std::string>();
+    }
+    if (req.has_param("slot")) {
+        return req.get_param_value("slot");
+    }
+    return "player";
+}
+
 } // namespace
 
 int main() {
@@ -41,19 +63,36 @@ int main() {
     utils::RandomGenerator rng;
 
     game::State state(rng);
+    state.god_mode = env_god_mode_enabled();
+    if (state.god_mode) {
+        std::cout << "GODMODE enabled: spectator camera — player controlled via /api/*" << std::endl;
+    }
     std::string map_snapshot;
 
-    svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content(R"({"status": "ok", "service": "game-service"})", "application/json");
+    svr.Get("/health", [&state](const httplib::Request&, httplib::Response& res) {
+        json body = {{"status", "ok"}, {"service", "game-service"}, {"god_mode", state.god_mode}};
+        res.set_content(body.dump(), "application/json");
     });
 
     svr.Get("/api/state", [&state](const httplib::Request&, httplib::Response& res) {
         res.set_content(json(state).dump(), "application/json");
     });
 
+    svr.Post("/api/tick", [&state](const httplib::Request& req, httplib::Response& res) {
+        state.process_realtime_tick();
+        json payload = {{"success", true}};
+        res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
+    });
+
     svr.Post("/api/map", [&state, &map_snapshot](const httplib::Request& req, httplib::Response& res) {
         try {
             const json body = json::parse(req.body);
+            const std::string mode = body.value("mode", "start");
+            if (mode == "reset") {
+                state.reset_campaign();
+            } else if (mode == "next_level") {
+                state.advance_campaign_level();
+            }
             const auto options = body.get<game::MapOptions>();
             state.start_new_game(options);
 
@@ -76,18 +115,20 @@ int main() {
         if (req.has_param("radius")) {
             radius = std::stoi(req.get_param_value("radius"));
         }
+        const std::string slot = req.has_param("slot") ? req.get_param_value("slot") : "player";
 
         json payload = {
             {"success", true},
-            {"cells", state.get_visible_cells(radius)}
+            {"cells", state.get_visible_cells(radius, slot)}
         };
         res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
     });
 
     svr.Get("/api/available_actions", [&state](const httplib::Request& req, httplib::Response& res) {
+        const std::string slot = req.has_param("slot") ? req.get_param_value("slot") : "player";
         json payload = {
             {"success", true},
-            {"actions", state.get_available_actions()}
+            {"actions", state.get_available_actions(slot)}
         };
         res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
     });
@@ -96,6 +137,7 @@ int main() {
         try {
             const json body = json::parse(req.body);
             const std::string direction = body.value("direction", "unknown");
+            const std::string slot = action_slot_from(req, body);
 
             int dx = 0;
             int dy = 0;
@@ -103,13 +145,14 @@ int main() {
 
             game::MoveResult result;
             if (dx != 0 || dy != 0) {
-                result = state.move(dx, dy);
+                result = state.move_slot(slot, dx, dy);
             }
 
             json payload = {
                 {"success", result.success},
                 {"x", result.x},
-                {"y", result.y}
+                {"y", result.y},
+                {"slot", slot}
             };
             res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
         } catch (...) {
@@ -121,17 +164,27 @@ int main() {
     svr.Post("/api/attack", [&](const httplib::Request& req, httplib::Response& res) {
         try {
             const json body = json::parse(req.body);
-            const int target_x = body.value("target_x", state.player.x);
-            const int target_y = body.value("target_y", state.player.y);
+            const std::string slot = action_slot_from(req, body);
+            const int actor_x = (slot == "rival") ? state.rival.x : state.player.x;
+            const int actor_y = (slot == "rival") ? state.rival.y : state.player.y;
+            if (slot != "player" && slot != "rival") {
+                res.status = 400;
+                res.set_content(R"({"success": false, "error": "Invalid slot"})", "application/json");
+                return;
+            }
 
-            const int dx = target_x - state.player.x;
-            const int dy = target_y - state.player.y;
-            const game::AttackResult result = state.attack(dx, dy);
+            const int target_x = body.value("target_x", actor_x);
+            const int target_y = body.value("target_y", actor_y);
+
+            const int dx = target_x - actor_x;
+            const int dy = target_y - actor_y;
+            const game::AttackResult result = state.attack_slot(slot, dx, dy);
 
             json payload = {
                 {"success", result.success},
                 {"damage", result.damage},
-                {"target_dead", result.target_dead}
+                {"target_dead", result.target_dead},
+                {"slot", slot}
             };
             res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
         } catch (...) {
@@ -144,13 +197,14 @@ int main() {
         try {
             const json body = json::parse(req.body);
             const std::string item_id = body.value("item_id", "");
+            const std::string slot = action_slot_from(req, body);
 
             game::UseItemResult result;
             if (!item_id.empty()) {
-                result = state.use_item(item_id);
+                result = state.use_item_slot(slot, item_id);
             }
 
-            json payload = {{"success", result.success}};
+            json payload = {{"success", result.success}, {"slot", slot}};
             if (result.success) {
                 payload["effect"] = result.effect;
                 payload["value"] = result.value;
@@ -162,18 +216,35 @@ int main() {
         }
     });
 
-    svr.Post("/api/pickup_item", [&](const httplib::Request& req, httplib::Response& res) {
-        const game::PickupResult result = state.pickup();
-        json payload = {
-            {"success", result.success},
-            {"items", result.items}
-        };
-        res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
+    svr.Get("/api/scout_around", [&state](const httplib::Request& req, httplib::Response& res) {
+        const std::string slot = req.has_param("slot") ? req.get_param_value("slot") : "rival";
+        int entry_corridor = -1;
+        if (req.has_param("entry_corridor")) {
+            try {
+                entry_corridor = std::stoi(req.get_param_value("entry_corridor"));
+            } catch (...) {}
+        }
+        std::vector<int> blocked;
+        if (req.has_param("blocked")) {
+            const std::string raw = req.get_param_value("blocked");
+            size_t start = 0;
+            while (start < raw.size()) {
+                const size_t comma = raw.find(',', start);
+                const std::string token = raw.substr(
+                    start, comma == std::string::npos ? std::string::npos : comma - start);
+                if (!token.empty()) {
+                    try {
+                        blocked.push_back(std::stoi(token));
+                    } catch (...) {}
+                }
+                if (comma == std::string::npos) break;
+                start = comma + 1;
+            }
+        }
+        json payload = state.scout_around(slot, entry_corridor, blocked);
+        res.set_content(with_state(payload, state, false).dump(), "application/json");
     });
 
-    // API для управления врагами
-    
-    // GET /api/enemies - получить список всех врагов
     svr.Get("/api/enemies", [&state](const httplib::Request& req, httplib::Response& res) {
         json payload = {
             {"success", true},
@@ -182,8 +253,6 @@ int main() {
         res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
     });
 
-    // POST /api/enemy/move - движение врага
-    // Ожидает: {"enemy_index": <int>, "direction": "up|down|left|right"}
     svr.Post("/api/enemy/move", [&](const httplib::Request& req, httplib::Response& res) {
         try {
             const json body = json::parse(req.body);
@@ -211,8 +280,6 @@ int main() {
         }
     });
 
-    // POST /api/enemy/attack - атака врага
-    // Ожидает: {"enemy_index": <int>, "target_x": <int>, "target_y": <int>}
     svr.Post("/api/enemy/attack", [&](const httplib::Request& req, httplib::Response& res) {
         try {
             const json body = json::parse(req.body);
@@ -244,8 +311,6 @@ int main() {
         }
     });
 
-    // GET /api/enemy/visible_cells - видимость врага
-    // Ожидает query param: ?enemy_index=<int>&radius=<int>
     svr.Get("/api/enemy/visible_cells", [&state](const httplib::Request& req, httplib::Response& res) {
         int enemy_index = -1;
         int radius = 5;
@@ -264,10 +329,6 @@ int main() {
         res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
     });
 
-    // Real-Time Sync
-
-    // GET /api/update - обновить состояние и проверить условия победы
-    // Query param: ?current_time_ms=<int>
     svr.Get("/api/update", [&state](const httplib::Request& req, httplib::Response& res) {
         int current_time_ms = 0;
         if (req.has_param("current_time_ms")) {
@@ -283,9 +344,6 @@ int main() {
         res.set_content(with_state(payload, state, true).dump(), "application/json");
     });
 
-    // GET /api/player/ready - проверить готовность игрока к действию
-    // Query param: ?current_time_ms=<int>
-    // Возвращает: {"ready": true/false, "time_to_action_ms": <int>}
     svr.Get("/api/player/ready", [&state](const httplib::Request& req, httplib::Response& res) {
         int current_time_ms = 0;
         if (req.has_param("current_time_ms")) {
@@ -303,8 +361,6 @@ int main() {
         res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
     });
 
-    // GET /api/enemy/ready - проверить готовность врага к действию
-    // Query params: ?enemy_index=<int>&current_time_ms=<int>
     svr.Get("/api/enemy/ready", [&state](const httplib::Request& req, httplib::Response& res) {
         int enemy_index = -1;
         int current_time_ms = 0;

@@ -51,6 +51,7 @@ MCP-tools проксируются через `mcp-server` на HTTP REST API `g
   "game_over": false,
   "phase": "player_turn",
   "won": false,
+  "game_state": "running",
   "steps": 0,
   "map_loot": [
     {"id": 0, "x": 12, "y": 8, "item": {"id": "potion", "name": "Health Potion", "type": "consumable", "count": 1}}
@@ -65,9 +66,10 @@ MCP-tools проксируются через `mcp-server` на HTTP REST API `g
 | `player.gold` | int | Золото |
 | `player.inventory` | Item[] | Инвентарь |
 | `enemies` | Enemy[] | Враги на карте |
-| `game_over` | bool | `true` при `phase == "player_dead"` |
-| `phase` | string | `player_turn` / `enemy_turn` / `player_dead` / `victory` |
-| `won` | bool | `true` при `phase == "victory"` |
+| `game_over` | bool | `true` when game finished |
+| `phase` | string | `player_turn` / `victory` / `player_dead` (compat layer) |
+| `won` | bool | `true` when player wins |
+| `game_state` | string | `running` / `player_victory` / `enemy_victory` |
 | `steps` | int | Счётчик ходов |
 | `map_loot` | Loot[] | Предметы на карте |
 
@@ -83,7 +85,22 @@ MCP-tools проксируются через `mcp-server` на HTTP REST API `g
 
 ---
 
-### 2. move
+### 2. new_game
+
+- **REST**: `POST /api/map`
+- **Body**: `MapOptions` (`map_width`, `map_height`, `min_node_size`, `max_depth`, `seed`)
+- **Response**:
+
+```json
+{
+  "success": true,
+  "state": { "...": "..." }
+}
+```
+
+---
+
+### 3. move
 
 - **REST**: `POST /api/move`
 - **Body**: `{"direction": "up" | "down" | "left" | "right"}`

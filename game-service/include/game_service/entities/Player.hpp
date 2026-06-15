@@ -18,6 +18,9 @@ struct Player {
     int max_hp;
     int gold;
     std::vector<Item> inventory;
+    int respawns_remaining = 0;
+    int spawn_x = 0;
+    int spawn_y = 0;
     
     // Вычисленные пассивные бонусы (обновляются при изменении инвентаря)
     int current_damage_bonus = 0;      // Дополнительный урон
@@ -53,8 +56,9 @@ struct Player {
     }
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Player, x, y, hp, max_hp, gold, inventory, 
-                                   current_damage_bonus, current_resistance)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Player, x, y, hp, max_hp, gold, inventory,
+                                   current_damage_bonus, current_resistance, respawns_remaining,
+                                   spawn_x, spawn_y)
 
 }
 

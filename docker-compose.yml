@@ -108,8 +108,7 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     devices:
-      - /dev/kfd
-      - /dev/dri
+      - /dev/dxg:/dev/dxg
     group_add:
       - ${RENDER_GID:-989}
       - ${VIDEO_GID:-985}

@@ -119,55 +119,16 @@ export class GameClient {
         return response.cells ?? [];
     }
 
+    async spectatorMove(direction: 'up' | 'down' | 'left' | 'right'): Promise<MoveResponse> {
+        return this.fetch<MoveResponse>('/api/spectator/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ direction }),
+        });
+    }
+
     async getAvailableActions(): Promise<string[]> {
         const response = await this.fetch<ActionsResponse>('/api/available_actions');
         return response.actions ?? [];
     }
-}
-    return response.state;
-  }
-
-  async move(direction: 'up' | 'down' | 'left' | 'right'): Promise<MoveResponse> {
-    return this.fetch<MoveResponse>('/api/move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ direction }),
-    });
-  }
-
-  async attack(targetX: number, targetY: number): Promise<AttackResponse> {
-    return this.fetch<AttackResponse>('/api/attack', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target_x: targetX, target_y: targetY }),
-    });
-  }
-
-  async useItem(itemId: string): Promise<UseItemResponse> {
-    return this.fetch<UseItemResponse>('/api/use_item', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ item_id: itemId }),
-    });
-  }
-
-  async getVisibleCells(radius: number = 5, slot: string = 'player'): Promise<VisibleCell[]> {
-    const response = await this.fetch<VisibleCellsResponse>(
-      `/api/visible_cells?radius=${Math.max(1, Math.min(10, radius))}&slot=${encodeURIComponent(slot)}`
-    );
-    return response.cells ?? [];
-  }
-
-  async spectatorMove(direction: 'up' | 'down' | 'left' | 'right'): Promise<MoveResponse> {
-    return this.fetch<MoveResponse>('/api/spectator/move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ direction }),
-    });
-  }
-
-  async getAvailableActions(): Promise<string[]> {
-    const response = await this.fetch<ActionsResponse>('/api/available_actions');
-    return response.actions ?? [];
-  }
 }

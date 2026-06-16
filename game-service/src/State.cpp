@@ -5,6 +5,7 @@
 #include <cmath>
 #include <algorithm>
 #include <queue>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -1192,6 +1193,278 @@ std::vector<std::string> State::cells_to_directions(
     return directions;
 }
 
+namespace {
+
+char enemy_map_symbol(EnemyType type) {
+    switch (type) {
+    case EnemyType::Goblin: return 'G';
+    case EnemyType::Orc: return 'O';
+    case EnemyType::Troll: return 'T';
+    case EnemyType::Rat: return 'R';
+    }
+    return 'E';
+}
+
+} // namespace
+
+json State::get_room_map(const std::string& slot) const {
+    json out = {
+        {"in_room", false},
+        {"in_corridor", false},
+        {"room_index", -1},
+        {"origin_x", 0},
+        {"origin_y", 0},
+        {"width", 0},
+        {"height", 0},
+        {"your_position", json::object()},
+        {"legend", "#=wall .=floor C=corridor +=room_exit H=you A=other_robot G/O/T/R=enemies $=loot"},
+        {"rows", json::array()},
+        {"entities", json::array()},
+        {"enemies", json::array()},
+        {"exits", json::array()},
+        {"visible_cell_keys", json::array()}
+    };
+
+    const Player* actor = actor_for_slot(slot);
+    if (!actor || map.rooms.empty() || map.width <= 0 || map.height <= 0) {
+        return out;
+    }
+
+    out["your_position"] = {{"x", actor->x}, {"y", actor->y}};
+
+    const auto is_foreign_room = [&](int x, int y, int own_room_index) {
+        const int at = room_index_at(x, y);
+        return at >= 0 && at != own_room_index;
+    };
+
+    struct MapCell {
+        int x;
+        int y;
+        char tile;
+    };
+    std::vector<MapCell> visible_cells;
+    std::unordered_set<std::string> visible_keys;
+    json exits = json::array();
+
+    auto record_cell = [&](int x, int y, char tile) {
+        const auto key = std::to_string(x) + "," + std::to_string(y);
+        if (visible_keys.count(key) > 0) return;
+        visible_keys.insert(key);
+        visible_cells.push_back({x, y, tile});
+    };
+
+    const auto enemy_in_local_view = [&](const Enemy& enemy, int own_room_index) {
+        const int at = room_index_at(enemy.x, enemy.y);
+        if (own_room_index >= 0) {
+            if (at == own_room_index) return true;
+            if (at >= 0) return false;
+            const int ci = corridor_index_at(enemy.x, enemy.y);
+            return ci >= 0 && corridor_links_room(static_cast<size_t>(ci), own_room_index);
+        }
+        const int actor_ci = corridor_index_at(actor->x, actor->y);
+        if (actor_ci < 0) return false;
+        return corridor_index_at(enemy.x, enemy.y) == actor_ci && at < 0;
+    };
+
+    const auto default_tile_for = [&](int x, int y, int own_room_index) {
+        if (!map.is_walkable(x, y)) return '#';
+        if (own_room_index < 0) return 'C';
+        if (room_index_at(x, y) == own_room_index) return '.';
+        return 'C';
+    };
+
+    const int actor_room_index = room_index_at(actor->x, actor->y);
+
+    if (actor_room_index >= 0) {
+        const auto& room = map.rooms[static_cast<size_t>(actor_room_index)];
+        out["in_room"] = true;
+        out["room_index"] = actor_room_index;
+
+        for (int y = room.y; y < room.y + room.h; ++y) {
+            for (int x = room.x; x < room.x + room.w; ++x) {
+                record_cell(x, y, map.is_walkable(x, y) ? '.' : '#');
+            }
+        }
+
+        for (size_t ci = 0; ci < map.corridors.size(); ++ci) {
+            if (!corridor_links_room(ci, actor_room_index)) continue;
+            const auto& corridor = map.corridors[ci];
+            for (int y = corridor.y; y < corridor.y + corridor.h; ++y) {
+                for (int x = corridor.x; x < corridor.x + corridor.w; ++x) {
+                    if (!map.is_walkable(x, y)) continue;
+                    if (is_foreign_room(x, y, actor_room_index)) continue;
+                    const bool inside_own_room =
+                        x >= room.x && x < room.x + room.w &&
+                        y >= room.y && y < room.y + room.h;
+                    record_cell(x, y, inside_own_room ? '+' : 'C');
+                }
+            }
+        }
+
+        for (size_t ci = 0; ci < map.corridors.size(); ++ci) {
+            if (!corridor_links_room(ci, actor_room_index)) continue;
+            const auto& corridor = map.corridors[ci];
+            for (int y = corridor.y; y < corridor.y + corridor.h; ++y) {
+                for (int x = corridor.x; x < corridor.x + corridor.w; ++x) {
+                    if (!map.is_walkable(x, y)) continue;
+                    if (x < room.x || x >= room.x + room.w || y < room.y || y >= room.y + room.h) continue;
+                    exits.push_back({
+                        {"x", x},
+                        {"y", y},
+                        {"corridor_index", static_cast<int>(ci)}
+                    });
+                }
+            }
+        }
+        out["exits"] = exits;
+    } else {
+        const int corridor_index = corridor_index_at(actor->x, actor->y);
+        if (corridor_index < 0) {
+            out["in_corridor"] = true;
+            out["hint"] =
+                "Position unknown — use scout_around or active_path fallback.";
+            return out;
+        }
+
+        out["in_corridor"] = true;
+        out["corridor_index"] = corridor_index;
+        const auto& corridor = map.corridors[static_cast<size_t>(corridor_index)];
+        for (int y = corridor.y; y < corridor.y + corridor.h; ++y) {
+            for (int x = corridor.x; x < corridor.x + corridor.w; ++x) {
+                if (!map.is_walkable(x, y)) continue;
+                if (room_index_at(x, y) >= 0) continue;
+                record_cell(x, y, 'C');
+            }
+        }
+    }
+
+    for (const auto& enemy : enemies) {
+        if (!enemy_in_local_view(enemy, actor_room_index)) continue;
+        record_cell(enemy.x, enemy.y, default_tile_for(enemy.x, enemy.y, actor_room_index));
+    }
+
+    if (visible_cells.empty()) {
+        out["hint"] = "No visible area — use scout_around fallback.";
+        return out;
+    }
+
+    int min_x = visible_cells.front().x;
+    int min_y = visible_cells.front().y;
+    int max_x = min_x;
+    int max_y = min_y;
+    for (const auto& cell : visible_cells) {
+        min_x = std::min(min_x, cell.x);
+        min_y = std::min(min_y, cell.y);
+        max_x = std::max(max_x, cell.x);
+        max_y = std::max(max_y, cell.y);
+    }
+
+    const int width = max_x - min_x + 1;
+    const int height = max_y - min_y + 1;
+    out["origin_x"] = min_x;
+    out["origin_y"] = min_y;
+    out["width"] = width;
+    out["height"] = height;
+
+    std::vector<std::string> rows(static_cast<size_t>(height), std::string(static_cast<size_t>(width), '#'));
+    std::unordered_map<std::string, char> tile_at;
+    for (const auto& cell : visible_cells) {
+        tile_at[std::to_string(cell.x) + "," + std::to_string(cell.y)] = cell.tile;
+    }
+
+    const bool is_player_slot = slot == "player";
+    const char self_mark = is_player_slot ? 'H' : 'A';
+    const char other_mark = is_player_slot ? 'A' : 'H';
+    const Player& other = is_player_slot ? rival : player;
+
+    auto place_symbol = [&](int x, int y, char symbol) {
+        const auto key = std::to_string(x) + "," + std::to_string(y);
+        if (visible_keys.count(key) == 0) return;
+        const int local_x = x - min_x;
+        const int local_y = y - min_y;
+        rows[static_cast<size_t>(local_y)][static_cast<size_t>(local_x)] = symbol;
+    };
+
+    for (int y = min_y; y <= max_y; ++y) {
+        for (int x = min_x; x <= max_x; ++x) {
+            const auto key = std::to_string(x) + "," + std::to_string(y);
+            const auto it = tile_at.find(key);
+            if (it == tile_at.end()) continue;
+            rows[static_cast<size_t>(y - min_y)][static_cast<size_t>(x - min_x)] = it->second;
+        }
+    }
+
+    json entities = json::array();
+    json enemies_on_map = json::array();
+    for (const auto& loot : dropped_loot) {
+        const auto key = std::to_string(loot.x) + "," + std::to_string(loot.y);
+        if (visible_keys.count(key) == 0) continue;
+        place_symbol(loot.x, loot.y, '$');
+        entities.push_back({
+            {"symbol", "$"},
+            {"kind", "loot"},
+            {"x", loot.x},
+            {"y", loot.y},
+            {"item_id", loot.item.id}
+        });
+    }
+
+    if (other.hp > 0) {
+        const auto key = std::to_string(other.x) + "," + std::to_string(other.y);
+        if (visible_keys.count(key) > 0) {
+            place_symbol(other.x, other.y, other_mark);
+            entities.push_back({
+                {"symbol", std::string(1, other_mark)},
+                {"kind", "robot"},
+                {"x", other.x},
+                {"y", other.y},
+                {"role", is_player_slot ? "rival" : "player"}
+            });
+        }
+    }
+
+    for (const auto& enemy : enemies) {
+        if (!enemy_in_local_view(enemy, actor_room_index)) continue;
+        const char symbol = enemy_map_symbol(enemy.type);
+        place_symbol(enemy.x, enemy.y, symbol);
+        json enemy_entry = {
+            {"symbol", std::string(1, symbol)},
+            {"kind", "enemy"},
+            {"x", enemy.x},
+            {"y", enemy.y},
+            {"type", enemy.type},
+            {"hp", enemy.hp}
+        };
+        entities.push_back(enemy_entry);
+        enemies_on_map.push_back(enemy_entry);
+    }
+
+    if (actor->hp > 0) {
+        place_symbol(actor->x, actor->y, self_mark);
+        entities.push_back({
+            {"symbol", std::string(1, self_mark)},
+            {"kind", "you"},
+            {"x", actor->x},
+            {"y", actor->y}
+        });
+    }
+
+    json row_json = json::array();
+    for (const auto& row : rows) {
+        row_json.push_back(row);
+    }
+    out["rows"] = row_json;
+    out["entities"] = entities;
+    out["enemies"] = enemies_on_map;
+
+    json visible_cell_keys = json::array();
+    for (const auto& key : visible_keys) {
+        visible_cell_keys.push_back(key);
+    }
+    out["visible_cell_keys"] = visible_cell_keys;
+    return out;
+}
+
 json State::scout_around(const std::string& slot,
                          int entry_corridor_hint,
                          const std::vector<int>& blocked_corridors) const {
@@ -1452,7 +1725,9 @@ void to_json(json& j, const State& state) {
         {"steps", state.steps},
         {"map_loot", state.dropped_loot},
         {"rival_room_index", state.room_index_at(state.rival.x, state.rival.y)},
-        {"player_room_index", state.room_index_at(state.player.x, state.player.y)}
+        {"player_room_index", state.room_index_at(state.player.x, state.player.y)},
+        {"player_room_map", state.get_room_map("player")},
+        {"rival_room_map", state.get_room_map("rival")}
     };
 }
 

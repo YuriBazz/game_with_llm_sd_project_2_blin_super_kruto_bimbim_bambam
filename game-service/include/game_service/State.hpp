@@ -166,6 +166,7 @@ public:
     [[nodiscard]] json get_enemy_visible_cells(int enemy_index, int radius) const;
     [[nodiscard]] std::vector<json> get_enemies_state() const;
     [[nodiscard]] int room_index_at(int x, int y) const;
+    [[nodiscard]] json get_room_map(const std::string& slot) const;
 
 private:
     // Внутренний метод перемещения врага с обновлением entity_grid

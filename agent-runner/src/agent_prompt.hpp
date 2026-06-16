@@ -30,7 +30,14 @@ How to win:
 4. Repeat until `your_kills >= kills_required`.
 5. When `rival.hp` drops below 40% of `max_hp` and you have a potion → `use_item` with potion.
 6. Walk onto loot tiles — items are picked up automatically when you move onto them.
-7. When no safe target, explore — `scout_around` or follow cached corridor paths.
+7. When no safe target, explore using `current_room_map` exits (+) — `scout_around` and corridor paths are fallback only.
+
+# PRIMARY INPUT — current_room_map (every turn)
+- Before each step you receive `current_room_map`: your room + adjacent corridor tiles only.
+- Neighboring room interiors are hidden — you cannot see through corridors into other rooms.
+- Legend: `#` wall, `.` floor, `C` corridor, `+` room exit, `H`/`A` robots, `G`/`O`/`T`/`R` enemies, `$` loot.
+- Plan moves and attacks from this map — you see the whole room without calling scout_around.
+- `entities` lists world `(x,y)` for each symbol — use these coordinates in `attack`.
 
 # TARGET SELECTION — your judgment (no autopilot)
 - goblin / rat (~8 HP, easy): good farm targets.
@@ -40,15 +47,10 @@ How to win:
 - If only hard targets nearby → retreat via corridor path, scout another room, or heal first.
 - `nearby_enemies` is sorted by distance for info only — pick the target YOU prefer.
 
-# EXPLORATION — scout_around ("оглянуться вокруг")
-- One tool for exploration: reveals your whole current room + nearby corridor tiles, and caches corridor exit paths.
-- No radius argument — standing in a room always reveals the entire room.
-- Scout skips the corridor you entered from when the room has other exits.
-- If the room has only one corridor, scout marks it `avoid_return: true` — use once, never backtrack.
-- `blocked_corridors` in path cache are dead-end exits — never walk into them again.
-- If `known_paths` is 0 and no nearby_enemies → your turn should be `scout_around`.
-- After scout, follow `active_path.next_direction` each turn until path completes or room changes.
-- Monster adjacent while on a path: if HP >= 40% → `attack`; if HP < 40% → keep following path (retreat).
+# FALLBACK EXPLORATION — scout_around / corridor paths
+- Use ONLY when `current_room_map` has no local rows (no room/corridor vision) or you are stuck.
+- `scout_around` caches corridor exit paths; then follow `active_path.next_direction`.
+- Do NOT call scout_around while you already have a local map with rows.
 
 # LOOT (automatic)
 - There is NO pickup action. Loot is collected automatically when you step on its tile.
@@ -83,12 +85,12 @@ The user message ALREADY contains full state and legal actions.
 - Do NOT call `get_available_actions` — listed below.
 
 # YOUR DECISION (every turn goes through you — no auto-actions)
-Decision rule — read Available actions and nearby_enemies, then pick ONE:
+Decision rule — read `current_room_map`, Available actions, and nearby_enemies, then pick ONE:
 - `rival.hp` < 40% max AND `use_item` listed → use potion.
-- `attack` listed → choose adjacent target YOU judge winnable; retreat with `move` if only hard targets and low HP.
-- `attack` NOT listed + `known_paths` > 0 + active_path.next_direction set → move that direction (explore/retreat).
-- `attack` NOT listed + `known_paths` == 0 + no nearby_enemies → `scout_around`.
-- `attack` NOT listed → `move` toward a target you chose, or explore — do not blindly charge the nearest red mob.
+- `attack` listed → choose adjacent target from room map / entities; retreat with `move` if only hard targets and low HP.
+- `in_room` true OR corridor map visible → `move` using local map only (room + adjacent corridors).
+- no local map OR stuck → `scout_around` or follow `active_path.next_direction` (fallback).
+- `attack` NOT listed + no room map + no paths → `scout_around` then move.
 
 # OUTPUT — strict JSON only, no markdown, no explanation
 {"tool":"<name>","arguments":{...}}
@@ -115,7 +117,14 @@ How to win:
 4. Repeat until `your_kills >= kills_required`.
 5. When `player.hp` drops below 40% of `max_hp` and you have a potion → `use_item` with potion.
 6. Walk onto loot tiles — items are picked up automatically when you move onto them.
-7. When no safe target, explore — `scout_around` or follow cached corridor paths.
+7. When no safe target, explore using `current_room_map` exits (+) — `scout_around` and corridor paths are fallback only.
+
+# PRIMARY INPUT — current_room_map (every turn)
+- Before each step you receive `current_room_map`: your room + adjacent corridor tiles only.
+- Neighboring room interiors are hidden — you cannot see through corridors into other rooms.
+- Legend: `#` wall, `.` floor, `C` corridor, `+` room exit, `H`/`A` robots, `G`/`O`/`T`/`R` enemies, `$` loot.
+- Plan moves and attacks from this map — you see the whole room without calling scout_around.
+- `entities` lists world `(x,y)` for each symbol — use these coordinates in `attack`.
 
 # TARGET SELECTION — your judgment (no autopilot)
 - goblin / rat (~8 HP, easy): good farm targets.
@@ -124,10 +133,10 @@ How to win:
 - Do NOT rush the closest enemy if `threat` is hard and your HP is low.
 - If only hard targets nearby → retreat via corridor path, scout another room, or heal first.
 
-# EXPLORATION — scout_around
-- Reveals your whole current room + nearby corridor tiles, and caches corridor exit paths.
-- If `known_paths` is 0 and no nearby_enemies → your turn should be `scout_around`.
-- After scout, follow `active_path.next_direction` each turn until path completes or room changes.
+# FALLBACK EXPLORATION — scout_around / corridor paths
+- Use ONLY when `current_room_map` has no local rows (no room/corridor vision) or you are stuck.
+- `scout_around` caches corridor paths; follow `active_path.next_direction` when leaving rooms.
+- Do NOT call scout_around while you already have a local map with rows.
 
 # LOOT (automatic)
 - There is NO pickup action. Loot is collected automatically when you step on its tile.
@@ -149,12 +158,11 @@ How to win:
 - The other robot (A) is visible but you do NOT control them.
 
 # YOUR DECISION (every turn goes through you — no auto-actions)
-Decision rule — read Available actions and nearby_enemies, then pick ONE:
+Decision rule — read `current_room_map`, Available actions, and nearby_enemies, then pick ONE:
 - `player.hp` < 40% max AND `use_item` listed → use potion.
-- `attack` listed → choose adjacent target YOU judge winnable; retreat with `move` if only hard targets and low HP.
-- `attack` NOT listed + `known_paths` > 0 + active_path.next_direction set → move that direction (explore/retreat).
-- `attack` NOT listed + `known_paths` == 0 + no nearby_enemies → `scout_around`.
-- `attack` NOT listed → `move` toward a target you chose, or explore — do not blindly charge the nearest red mob.
+- `attack` listed → choose adjacent target from room map / entities.
+- `in_room` true OR corridor map visible → `move` using local map only (room + adjacent corridors).
+- no local map OR stuck → `scout_around` or follow `active_path.next_direction` (fallback).
 
 # OUTPUT — strict JSON only, no markdown, no explanation
 {"tool":"<name>","arguments":{...}}
@@ -242,13 +250,20 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
 
     if (state.contains(other_key)) {
         const auto& h = state[other_key];
-        out["human"] = {
-            {"x", h.value("x", 0)},
-            {"y", h.value("y", 0)},
-            {"hp", h.value("hp", 0)},
-            {"kills", state.value(other_kills_key, 0)}
-        };
+        const std::string room_map_key = room_map_key_for(slot);
+        const json* room_map = state.contains(room_map_key) ? &state[room_map_key] : nullptr;
+        if (!room_map || cell_visible_in_room_map(h.value("x", 0), h.value("y", 0), *room_map)) {
+            out["human"] = {
+                {"x", h.value("x", 0)},
+                {"y", h.value("y", 0)},
+                {"hp", h.value("hp", 0)},
+                {"kills", state.value(other_kills_key, 0)}
+            };
+        }
     }
+
+    const std::string room_map_key = room_map_key_for(slot);
+    const json* room_map_ptr = state.contains(room_map_key) ? &state[room_map_key] : nullptr;
 
     json nearby = json::array();
     json adjacent = json::array();
@@ -257,6 +272,7 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
         ++total_enemies;
         const int ex = enemy.value("x", 0);
         const int ey = enemy.value("y", 0);
+        if (room_map_ptr && !cell_visible_in_room_map(ex, ey, *room_map_ptr)) continue;
         const int dist = std::abs(ex - px) + std::abs(ey - py);
         const std::string etype = enemy.value("type", "");
         const std::string threat = enemy_threat_label(etype);
@@ -290,6 +306,7 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
     for (const auto& item : state.value("map_loot", json::array())) {
         const int lx = item.value("x", 0);
         const int ly = item.value("y", 0);
+        if (room_map_ptr && !cell_visible_in_room_map(lx, ly, *room_map_ptr)) continue;
         const int dist = std::abs(lx - px) + std::abs(ly - py);
         if (dist <= 8) {
             json entry = item;
@@ -303,6 +320,14 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
     });
     out["nearby_loot"] = loot;
     out["loot_auto_pickup_on_move"] = true;
+
+    const std::string room_map_key = room_map_key_for(slot);
+    if (state.contains(room_map_key)) {
+        out["current_room_map"] = state[room_map_key];
+        if (state[room_map_key].contains("enemies")) {
+            out["enemies_on_map"] = state[room_map_key]["enemies"];
+        }
+    }
 
     return out.dump();
 }
@@ -323,6 +348,62 @@ inline bool has_potion(const json& state, const std::string& slot = "rival") {
     return false;
 }
 
+inline std::string room_map_key_for(const std::string& slot) {
+    return slot == "player" ? "player_room_map" : "rival_room_map";
+}
+
+inline bool cell_visible_in_room_map(int x, int y, const json& room_map) {
+    if (!room_map.is_object() || !room_map.contains("visible_cell_keys")) return false;
+    const std::string key = std::to_string(x) + "," + std::to_string(y);
+    for (const auto& entry : room_map["visible_cell_keys"]) {
+        if (entry.is_string() && entry.get<std::string>() == key) return true;
+    }
+    return false;
+}
+
+inline bool has_visible_local_map(const json& state, const std::string& slot) {
+    const std::string key = room_map_key_for(slot);
+    if (!state.contains(key) || !state[key].is_object()) return false;
+    const auto& room_map = state[key];
+    return room_map.contains("rows") && room_map["rows"].is_array() && !room_map["rows"].empty();
+}
+
+inline std::string format_room_map_for_prompt(const json& room_map) {
+    if (!room_map.is_object() || room_map.empty()) return "";
+
+    std::string text = "Current room map:\n";
+    text += room_map.value("legend", "");
+    text += "\nroom_index=" + std::to_string(room_map.value("room_index", -1));
+    text += " in_room=" + std::string(room_map.value("in_room", false) ? "true" : "false");
+    if (room_map.value("in_corridor", false) && (!room_map.contains("rows") || room_map["rows"].empty())) {
+        text += "\n" + room_map.value("hint", "In corridor — use scout_around fallback.");
+        return text;
+    }
+    text += " origin=(" + std::to_string(room_map.value("origin_x", 0)) + "," +
+            std::to_string(room_map.value("origin_y", 0)) + ")";
+    if (room_map.contains("your_position")) {
+        const auto& pos = room_map["your_position"];
+        text += " you=(" + std::to_string(pos.value("x", 0)) + "," +
+                std::to_string(pos.value("y", 0)) + ")";
+    }
+    if (room_map.contains("rows") && room_map["rows"].is_array()) {
+        for (const auto& row : room_map["rows"]) {
+            if (row.is_string()) {
+                text += "\n" + row.get<std::string>();
+            }
+        }
+    }
+    if (room_map.contains("enemies") && !room_map["enemies"].empty()) {
+        text += "\nenemies=" + room_map["enemies"].dump();
+    } else if (room_map.contains("entities") && !room_map["entities"].empty()) {
+        text += "\nentities=" + room_map["entities"].dump();
+    }
+    if (room_map.contains("exits") && !room_map["exits"].empty()) {
+        text += "\nexits=" + room_map["exits"].dump();
+    }
+    return text;
+}
+
 inline std::string build_user_prompt(const std::string& state_json,
                                      const json& actions,
                                      const json& full_state = json::object(),
@@ -332,11 +413,15 @@ inline std::string build_user_prompt(const std::string& state_json,
     const bool can_attack = actions_include(actions, "attack");
     const bool can_move = actions_include(actions, "move");
     const bool can_heal = actions_include(actions, "use_item");
+    const bool has_local_map = has_visible_local_map(full_state, slot);
 
-    std::string prompt = std::string(
-        "Current game state JSON:\n") + state_json;
+    std::string prompt;
+    if (full_state.contains(room_map_key_for(slot))) {
+        prompt = format_room_map_for_prompt(full_state[room_map_key_for(slot)]) + "\n\n";
+    }
+    prompt += std::string("Current game state JSON:\n") + state_json;
     if (!path_info.empty()) {
-        prompt += "\n\nCorridor path cache:\n" + path_info.dump();
+        prompt += "\n\nCorridor path cache (fallback navigation):\n" + path_info.dump();
     }
     prompt += "\n\nAvailable actions (only these are legal this turn):\n" + actions.dump();
     if (!feedback.empty()) {
@@ -352,12 +437,15 @@ inline std::string build_user_prompt(const std::string& state_json,
         }
     }
     if (can_attack) {
-        prompt += " attack is legal: you are adjacent — choose attack or move based on target threat and your HP.";
+        prompt += " attack is legal: you are adjacent — use room map entities for target_x/target_y.";
     } else if (can_move) {
-        prompt += " attack is NOT legal (not adjacent) — choose move or scout_around;"
-                   " pick targets from nearby_enemies by threat, not just distance.";
+        if (has_local_map) {
+            prompt += " attack is NOT legal — move using the local map (room + adjacent corridors only).";
+        } else {
+            prompt += " attack is NOT legal — no local map; use scout_around or active_path fallback.";
+        }
     }
-    if (!path_info.empty()) {
+    if (!path_info.empty() && !has_local_map) {
         const int known = path_info.value("known_paths", 0);
         if (known == 0 && !can_attack && can_move) {
             prompt += " No cached corridor paths — call scout_around before wandering.";

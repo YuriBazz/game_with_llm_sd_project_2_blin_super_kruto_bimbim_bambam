@@ -60,6 +60,31 @@ int main() {
     assert(serialized.contains("player_kills"));
     assert(serialized.contains("kills_required"));
     assert(serialized["game_state"] == "running");
+    assert(serialized.contains("player_room_map"));
+    assert(serialized.contains("rival_room_map"));
+    assert(serialized["player_room_map"].value("in_room", false));
+    assert(serialized["player_room_map"].contains("rows"));
+    assert(!serialized["player_room_map"]["rows"].empty());
+    assert(serialized["player_room_map"].contains("visible_cell_keys"));
+    for (const auto& exit_info : serialized["player_room_map"].value("exits", nlohmann::json::array())) {
+        assert(!exit_info.contains("destination_room_index"));
+    }
+
+    bool enemy_on_map = false;
+    bool enemy_symbol_on_rows = false;
+    for (const auto& ent : serialized["player_room_map"].value("enemies", nlohmann::json::array())) {
+        if (ent.value("kind", "") == "enemy") enemy_on_map = true;
+    }
+    for (const auto& row : serialized["player_room_map"]["rows"]) {
+        const std::string line = row.get<std::string>();
+        if (line.find('G') != std::string::npos || line.find('O') != std::string::npos ||
+            line.find('T') != std::string::npos || line.find('R') != std::string::npos) {
+            enemy_symbol_on_rows = true;
+        }
+    }
+    if (enemy_on_map) {
+        assert(enemy_symbol_on_rows);
+    }
 
     return 0;
 }

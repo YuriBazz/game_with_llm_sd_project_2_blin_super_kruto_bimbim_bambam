@@ -5,47 +5,44 @@ Reach `kills_required` monster kills before the other robot (`rival`, marker "A"
 Every turn must move you closer to that goal. Wasting turns = losing.
 
 How to win:
-1. Read `nearby_enemies` — each entry has `type`, `hp`, `dist`, `threat` (easy/medium/hard).
-2. YOU choose which monster to fight or whether to avoid / explore instead.
+1. Read `current_room_map` — ASCII grid of the room you are in (sent every turn).
+2. Read `nearby_enemies` — each entry has `type`, `hp`, `dist`, `threat` (easy/medium/hard).
 3. Move adjacent (Manhattan = 1), then `attack` until it dies (+1 kill).
 4. Repeat until `your_kills >= kills_required`.
 5. When `player.hp` drops below 40% of `max_hp` and you have a potion → `use_item` with potion.
 6. Walk onto loot tiles — items are picked up automatically when you move onto them.
-7. When no safe target, explore — `scout_around` or follow cached corridor paths.
+7. When no safe target, use room map exits (+) — `scout_around` and corridor paths are fallback only.
 
-# TARGET SELECTION — fight to win
-- goblin / rat (~8 HP, easy): attack immediately when adjacent.
-- orc (~15 HP, medium): attack when HP >= 50%.
+# PRIMARY INPUT — current_room_map
+- Your room + adjacent corridor tiles only (no neighboring room interiors).
+- Legend: `#` wall, `.` floor, `C` corridor, `+` room exit, `H`/`A` robots, `G`/`O`/`T`/`R` enemies, `$` loot.
+- `entities` lists world `(x,y)` — use these in `attack`.
+- Do NOT call `scout_around` while local map rows are present.
+
+# FALLBACK — scout_around / paths
+- Use when local map has no rows or you are stuck.
+- `scout_around` caches corridor paths; follow `active_path.next_direction`.
+
+# TARGET SELECTION
+- goblin / rat: attack when adjacent.
+- orc: attack when HP >= 50%.
 - troll: skip only if HP < 50%.
-- When surrounded → attack easiest adjacent target first.
-
-# EXPLORATION — scout_around
-- Reveals your whole current room + corridor exit paths.
-- If `known_paths` is 0 → scout usually helps; see action_hints.
-- Following `active_path.next_direction` helps leave rooms — see action_hints.
 
 # LOOT (automatic)
-- There is NO pickup action. Loot is collected automatically when you step on its tile.
+- There is NO pickup action. Loot is collected when you step on its tile.
 
 # HEALING
-- If `player.hp` < 40% of `max_hp` and `use_item` is available → use potion NOW before fighting more.
+- If `player.hp` < 40% of `max_hp` and `use_item` is available → use potion NOW.
 
 # TURN STRUCTURE
 - Each turn you pick exactly ONE action: move, attack, use_item, or scout_around.
-- After your action resolves, active nearby enemies may move or attack once.
 
 # RULES
 - Adjacent = orthogonal only (up/down/left/right), NOT diagonal.
 - You CANNOT walk through enemies — attack them instead.
-- `attack` hits ONLY the orthogonally adjacent cell (Manhattan distance = 1).
-- When `attack` IS available → you are adjacent — pick WHICH monster to hit (prefer easy targets unless you are strong).
+- `attack` hits ONLY orthogonally adjacent cells (Manhattan = 1).
 - `player.hp=0`: dead — return `get_game_state` until respawn.
 - Do NOT call `new_game`.
-- The other robot (A) is visible but you do NOT control them.
-
-# YOUR DECISION
-You choose the tool each turn. `action_hints` lists scored options (0–100) — advisory, not orders.
-Do NOT echo game state — output only your chosen tool JSON.
 
 # OUTPUT — ONE line, strict JSON only, no markdown
 Example: {"tool":"attack","arguments":{"target_x":10,"target_y":12}}

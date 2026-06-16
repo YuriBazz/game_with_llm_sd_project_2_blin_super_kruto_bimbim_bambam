@@ -238,7 +238,37 @@ private:
         if (state.contains("rival_room_index")) {
             view["player_room_index"] = state["rival_room_index"];
         }
+        if (state.contains("player_room_map")) {
+            view["rival_room_map"] = state["player_room_map"];
+        }
+        if (state.contains("rival_room_map")) {
+            view["player_room_map"] = state["rival_room_map"];
+        }
         return view;
+    }
+
+    std::string actor_state_key() const {
+        return agent_slot_ == "player" ? "player" : "rival";
+    }
+
+    std::string actor_room_map_key() const {
+        return agent_slot_ == "player" ? "player_room_map" : "rival_room_map";
+    }
+
+    std::string actor_room_index_key() const {
+        return agent_slot_ == "player" ? "player_room_index" : "rival_room_index";
+    }
+
+    bool actor_in_room(const json& state) const {
+        const std::string key = actor_room_map_key();
+        return state.contains(key) && state[key].value("in_room", false);
+    }
+
+    bool actor_has_local_map_view(const json& view) const {
+        return view.contains("rival_room_map") &&
+               view["rival_room_map"].contains("rows") &&
+               view["rival_room_map"]["rows"].is_array() &&
+               !view["rival_room_map"]["rows"].empty();
     }
 
     void prime_ollama_system_prompt() {
@@ -738,7 +768,8 @@ private:
 
         if (action_available(actions, "scout_around") &&
             !path_planner_.has_paths() &&
-            !has_enemies_in_state(view)) {
+            !has_enemies_in_state(view) &&
+            !actor_has_local_map_view(view)) {
             return json{{"tool", "scout_around"}, {"arguments", json::object()}};
         }
 
@@ -842,7 +873,8 @@ private:
 
         if (action_available(actions, "scout_around") &&
             !path_planner_.has_paths() &&
-            !has_enemies_in_state(state)) {
+            !has_enemies_in_state(state) &&
+            !actor_has_local_map_view(state)) {
             return R"({"tool":"scout_around","arguments":{}})";
         }
 
@@ -1157,12 +1189,13 @@ public:
     const agent::PathPlanner& path_planner() const { return path_planner_; }
 
     void sync_path_planner(const json& state) {
-        if (!state.contains("rival")) return;
+        const std::string actor_key = actor_state_key();
+        if (!state.contains(actor_key)) return;
         const int sid = state.value("session_id", 0);
-        const int rx = state["rival"]["x"].get<int>();
-        const int ry = state["rival"]["y"].get<int>();
-        const int room_at = state.value("rival_room_index", -1);
-        path_planner_.on_position_update(rx, ry, sid, room_at);
+        const int ax = state[actor_key]["x"].get<int>();
+        const int ay = state[actor_key]["y"].get<int>();
+        const int room_at = state.value(actor_room_index_key(), -1);
+        path_planner_.on_position_update(ax, ay, sid, room_at);
     }
 
     void note_action_result(const std::string& tool,
@@ -1170,10 +1203,11 @@ public:
                             const json& result,
                             const json& state) {
         action_feedback_.clear();
-        if (!state.contains("rival")) return;
+        const std::string actor_key = actor_state_key();
+        if (!state.contains(actor_key)) return;
 
-        const int ax = state["rival"]["x"].get<int>();
-        const int ay = state["rival"]["y"].get<int>();
+        const int ax = state[actor_key]["x"].get<int>();
+        const int ay = state[actor_key]["y"].get<int>();
         sync_blocked_dirs_for_position(ax, ay);
         sync_fetch_counter_for_position(ax, ay);
 

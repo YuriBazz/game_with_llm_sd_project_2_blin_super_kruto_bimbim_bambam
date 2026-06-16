@@ -221,42 +221,24 @@ private:
         return std::nullopt;
     }
 
-    const char* system_prompt() const {
+    std::string system_prompt() const {
         return agent::system_prompt_for(agent_slot_);
     }
 
-    json remap_for_agent_logic(const json& state) const {
-        if (agent_slot_ != "player") return state;
-        json view = state;
-        if (state.contains("player")) view["rival"] = state["player"];
-        if (state.contains("rival")) view["player"] = state["rival"];
-        view["rival_kills"] = state.value("player_kills", 0);
-        view["player_kills"] = state.value("rival_kills", 0);
-        if (state.contains("player_room_index")) {
-            view["rival_room_index"] = state["player_room_index"];
-        }
-        if (state.contains("rival_room_index")) {
-            view["player_room_index"] = state["rival_room_index"];
-        }
-        if (state.contains("player_room_map")) {
-            view["rival_room_map"] = state["player_room_map"];
-        }
-        if (state.contains("rival_room_map")) {
-            view["player_room_map"] = state["rival_room_map"];
-        }
-        return view;
-    }
-
     std::string actor_state_key() const {
-        return agent_slot_ == "player" ? "player" : "rival";
+        return agent::robot_meta(agent_slot_).slot;
     }
 
     std::string actor_room_map_key() const {
-        return agent_slot_ == "player" ? "player_room_map" : "rival_room_map";
+        return agent::robot_meta(agent_slot_).room_map_key;
     }
 
     std::string actor_room_index_key() const {
-        return agent_slot_ == "player" ? "player_room_index" : "rival_room_index";
+        return agent::robot_meta(agent_slot_).room_index_key;
+    }
+
+    bool has_actor(const json& state) const {
+        return state.contains(actor_state_key());
     }
 
     bool actor_in_room(const json& state) const {
@@ -264,11 +246,12 @@ private:
         return state.contains(key) && state[key].value("in_room", false);
     }
 
-    bool actor_has_local_map_view(const json& view) const {
-        return view.contains("rival_room_map") &&
-               view["rival_room_map"].contains("rows") &&
-               view["rival_room_map"]["rows"].is_array() &&
-               !view["rival_room_map"]["rows"].empty();
+    bool actor_has_local_map_view(const json& state) const {
+        const std::string key = actor_room_map_key();
+        return state.contains(key) &&
+               state[key].contains("rows") &&
+               state[key]["rows"].is_array() &&
+               !state[key]["rows"].empty();
     }
 
     void prime_ollama_system_prompt() {
@@ -742,21 +725,21 @@ private:
                !state["enemies"].empty();
     }
 
-    std::optional<json> decide_minimal_fallback(const json& view, const json& actions) {
-        if (!view.contains("rival")) return std::nullopt;
+    std::optional<json> decide_minimal_fallback(const json& state, const json& actions) {
+        if (!has_actor(state)) return std::nullopt;
 
-        const json& pl = view["rival"];
-        const int ax = pl["x"].get<int>();
-        const int ay = pl["y"].get<int>();
-        const int ahp = pl["hp"].get<int>();
+        const json& actor = state[actor_state_key()];
+        const int ax = actor["x"].get<int>();
+        const int ay = actor["y"].get<int>();
+        const int ahp = actor["hp"].get<int>();
         if (ahp <= 0) {
             return json{{"tool", "get_game_state"}, {"arguments", json::object()}};
         }
 
-        const int max_hp = std::max(1, pl["max_hp"].get<int>());
+        const int max_hp = std::max(1, actor["max_hp"].get<int>());
         if (action_available(actions, "use_item") &&
             ahp * 100 < max_hp * 40 &&
-            agent::has_potion(view, agent_slot_)) {
+            agent::has_potion(state, agent_slot_)) {
             return json{{"tool", "use_item"}, {"arguments", {{"item_id", "potion"}}}};
         }
 
@@ -768,14 +751,14 @@ private:
 
         if (action_available(actions, "scout_around") &&
             !path_planner_.has_paths() &&
-            !has_enemies_in_state(view) &&
-            !actor_has_local_map_view(view)) {
+            !has_enemies_in_state(state) &&
+            !actor_has_local_map_view(state)) {
             return json{{"tool", "scout_around"}, {"arguments", json::object()}};
         }
 
         if (action_available(actions, "move")) {
             sync_blocked_dirs_for_position(ax, ay);
-            if (auto rotated = pick_rotating_move(view, ax, ay)) return *rotated;
+            if (auto rotated = pick_rotating_move(state, ax, ay)) return *rotated;
         }
 
         return json{{"tool", "get_game_state"}, {"arguments", json::object()}};
@@ -839,19 +822,19 @@ private:
     }
 
     std::optional<std::string> call_mock(const json& state, const json& actions) {
-        if (!state.contains("rival")) {
+        if (!has_actor(state)) {
             return R"({"tool":"get_game_state","arguments":{}})";
         }
 
-        const json& pl = state["rival"];
-        const int ax = pl["x"].get<int>();
-        const int ay = pl["y"].get<int>();
-        const int ahp = pl["hp"].get<int>();
+        const json& actor = state[actor_state_key()];
+        const int ax = actor["x"].get<int>();
+        const int ay = actor["y"].get<int>();
+        const int ahp = actor["hp"].get<int>();
         if (ahp <= 0) {
             return R"({"tool":"get_game_state","arguments":{}})";
         }
 
-        const int max_hp = std::max(1, pl["max_hp"].get<int>());
+        const int max_hp = std::max(1, actor["max_hp"].get<int>());
 
         if (action_available(actions, "use_item") &&
             ahp * 100 < max_hp * 40 &&
@@ -930,23 +913,52 @@ private:
         if (tool == "get_visible_cells") {
             decision["tool"] = "scout_around";
             decision["arguments"] = json::object();
+            tool = "scout_around";
+        }
+
+        if (tool == "move") {
+            json& args = decision["arguments"];
+            if (decision.contains("to") && decision["to"].is_object()) {
+                if (!args.contains("x")) args["x"] = decision["to"].value("x", 0);
+                if (!args.contains("y")) args["y"] = decision["to"].value("y", 0);
+            }
+            for (const char* key : {"direction", "x", "y", "target_x", "target_y"}) {
+                if (decision.contains(key) && !args.contains(key)) {
+                    args[key] = decision[key];
+                }
+            }
+        } else if (tool == "attack") {
+            json& args = decision["arguments"];
+            if (decision.contains("target") && decision["target"].is_object()) {
+                if (!args.contains("target_x")) args["target_x"] = decision["target"].value("x", 0);
+                if (!args.contains("target_y")) args["target_y"] = decision["target"].value("y", 0);
+            }
+            for (const char* key : {"target_x", "target_y", "x", "y"}) {
+                if (decision.contains(key) && !args.contains(key)) {
+                    args[key] = decision[key];
+                }
+            }
         }
 
         return decision;
     }
 
-    void repair_move_decision(json& decision, const json& view) const {
+    void repair_move_decision(json& decision, const json& state) const {
         if (!decision.contains("tool") || decision["tool"] != "move") return;
         if (!decision.contains("arguments") || !decision["arguments"].is_object()) {
             decision["arguments"] = json::object();
         }
         json& args = decision["arguments"];
+        if (decision.contains("to") && decision["to"].is_object()) {
+            if (!args.contains("x")) args["x"] = decision["to"].value("x", 0);
+            if (!args.contains("y")) args["y"] = decision["to"].value("y", 0);
+        }
         const std::string dir = args.value("direction", "");
         if (!dir.empty() && dir_index(dir) >= 0) return;
-        if (!view.contains("rival")) return;
+        if (!has_actor(state)) return;
 
-        const int ax = view["rival"].value("x", 0);
-        const int ay = view["rival"].value("y", 0);
+        const int ax = state[actor_state_key()].value("x", 0);
+        const int ay = state[actor_state_key()].value("y", 0);
         if (args.contains("target_x") && args.contains("target_y")) {
             args["x"] = args["target_x"];
             args["y"] = args["target_y"];
@@ -1006,6 +1018,15 @@ private:
             return decision;
         }
 
+        static const std::regex to_re(
+            "\"to\"\\s*:\\s*\\{\\s*\"x\"\\s*:\\s*(-?\\d+)\\s*,\\s*\"y\"\\s*:\\s*(-?\\d+)\\s*\\}");
+        std::smatch to_match;
+        if (std::regex_search(raw, to_match, to_re)) {
+            decision["arguments"]["x"] = std::stoi(to_match[1].str());
+            decision["arguments"]["y"] = std::stoi(to_match[2].str());
+            return decision;
+        }
+
         if (decision["tool"] == "scout_around" || decision["tool"] == "get_game_state") {
             return decision;
         }
@@ -1044,7 +1065,7 @@ private:
     }
 
     std::optional<json> decide_with_mock(const json& state, const json& actions) {
-        const auto raw = call_mock(remap_for_agent_logic(state), actions);
+        const auto raw = call_mock(state, actions);
         if (!raw) return std::nullopt;
         return parse_tool_decision(*raw);
     }
@@ -1300,14 +1321,14 @@ public:
 
     json apply_stuck_guard(json decision, const json& state, const json& actions) {
         (void)actions;
-        if (!state.contains("rival")) return decision;
+        if (!has_actor(state)) return decision;
         if (!decision.contains("tool")) return decision;
 
         const std::string tool = decision["tool"].get<std::string>();
         if (tool != "move") return decision;
 
-        const int ax = state["rival"]["x"].get<int>();
-        const int ay = state["rival"]["y"].get<int>();
+        const int ax = state[actor_state_key()]["x"].get<int>();
+        const int ay = state[actor_state_key()]["y"].get<int>();
         const std::string dir = decision.value("arguments", json::object()).value("direction", "");
 
         if (dir.empty() || dir_index(dir) < 0) {
@@ -1337,7 +1358,7 @@ public:
     }
 
     json apply_path_guard(json decision, const json& state, const json& actions) {
-        if (!state.contains("rival") || !decision.contains("tool")) return decision;
+        if (!has_actor(state) || !decision.contains("tool")) return decision;
         if (!path_planner_.has_active_step()) return decision;
 
         const auto next_dir = path_planner_.next_direction();
@@ -1369,7 +1390,7 @@ public:
             consecutive_query_turns_ = 0;
         }
 
-        if (consecutive_query_turns_ >= 3 && is_query_tool(tool) && state.contains("rival")) {
+        if (consecutive_query_turns_ >= 3 && is_query_tool(tool) && has_actor(state)) {
             if (auto fallback = decide_minimal_fallback(state, actions)) return *fallback;
         }
 
@@ -1399,12 +1420,11 @@ public:
             std::cerr << "Token budget exceeded (" << total_tokens_used_
                       << "/" << max_total_tokens_ << ") — using minimal fallback"
                       << std::endl;
-            return decide_minimal_fallback(remap_for_agent_logic(state), actions);
+            return decide_minimal_fallback(state, actions);
         }
 
-        const json view = remap_for_agent_logic(state);
         ensure_session(state);
-        sync_path_planner(view);
+        sync_path_planner(state);
 
         const json path_info = path_planner_.summary_for_prompt();
         const std::string state_json = agent::compact_state_for_llm(state, agent_slot_);
@@ -1422,7 +1442,7 @@ public:
             } else if (provider_ == "openai") {
                 raw = call_openai(prompt);
             } else {
-                raw = call_mock(view, actions);
+                raw = call_mock(state, actions);
             }
 
             if (provider_ == "ollama" && raw) {
@@ -1446,7 +1466,7 @@ public:
 
             try {
                 if (auto decision = parse_tool_decision(*raw)) {
-                    repair_move_decision(*decision, view);
+                    repair_move_decision(*decision, state);
                     const std::string tool = decision->value("tool", "");
                     if (!tool.empty() && !action_is_available(actions, tool)) {
                         std::cerr << "LLM chose unavailable '" << tool
@@ -1492,13 +1512,13 @@ public:
         if (provider_ != "mock") {
             std::cerr << "LLM decision unusable — using minimal fallback (provider stays "
                       << provider_ << ")" << std::endl;
-            return decide_minimal_fallback(view, actions);
+            return decide_minimal_fallback(state, actions);
         }
         return std::nullopt;
     }
 
     json agent_view(const json& state) const {
-        return remap_for_agent_logic(state);
+        return state;
     }
 
     static std::unique_ptr<LLMClient> from_env() {
@@ -1541,7 +1561,7 @@ public:
     }
 
     void set_agent_config(const std::string& slot, int max_total_tokens) {
-        agent_slot_ = (slot == "player") ? "player" : "rival";
+        agent_slot_ = agent::robot_meta(slot).slot;
         max_total_tokens_ = max_total_tokens;
     }
 

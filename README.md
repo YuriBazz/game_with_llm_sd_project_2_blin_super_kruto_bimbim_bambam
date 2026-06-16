@@ -89,12 +89,15 @@ flowchart TB
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `mock` | `mock`, `ollama`, `openai` — переключение без правки кода |
+| `ROBOT_A_LLM_PROVIDER` | `ollama` | LLM для робота A (`agent-runner-rival`) |
+| `ROBOT_A_OLLAMA_MODEL` | `qwen2.5:3b` | Модель Ollama для A; должна быть в pull ollama |
+| `ROBOT_A_OPENAI_MODEL` | `gpt-4o-mini` | Модель OpenAI для A |
+| `ROBOT_H_LLM_PROVIDER` | `ollama` | LLM для робота H (`agent-runner-player`) |
+| `ROBOT_H_OLLAMA_MODEL` | `llama3.2:1b` | Модель Ollama для H |
+| `ROBOT_H_OPENAI_MODEL` | `gpt-4o-mini` | Модель OpenAI для H |
 | `OLLAMA_URL` | `http://ollama:11434` | Endpoint Ollama (в compose) |
-| `OLLAMA_MODEL` | `qwen2.5:3b` | Модель; должна совпадать с pull в `docker-compose.yml` |
 | `OLLAMA_NUM_GPU` | — | `0` = CPU-only при проблемах с GPU |
-| `OPENAI_API_KEY` | — | Ключ OpenAI (если `LLM_PROVIDER=openai`) |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Модель OpenAI |
+| `OPENAI_API_KEY` | — | Ключ OpenAI (если провайдер `openai`) |
 | `MAX_STEPS` | `500` | Лимит шагов agent-runner за раунд |
 | `MAX_TOKENS` | `5000` | Ограничение `num_predict` для LLM-ответа |
 | `TEMPERATURE` | `0.7` | Температура сэмплирования |
@@ -117,9 +120,9 @@ AMD iGPU / NVIDIA — см. комментарии в `.env.example` и `docker-
 ### Провайдеры
 
 ```bash
-LLM_PROVIDER=mock   ./scripts/compose-up.sh    # эвристика + pathfinding, без API
-LLM_PROVIDER=ollama ./scripts/compose-up.sh    # локальная модель (нужен pull)
-LLM_PROVIDER=openai ./scripts/compose-up.sh    # нужен OPENAI_API_KEY в .env
+LLM_PROVIDER=mock ROBOT_A_LLM_PROVIDER=mock ROBOT_H_LLM_PROVIDER=mock ./scripts/compose-up.sh
+ROBOT_A_LLM_PROVIDER=ollama ROBOT_H_LLM_PROVIDER=ollama ./scripts/compose-up.sh
+ROBOT_A_LLM_PROVIDER=openai ROBOT_H_LLM_PROVIDER=openai ./scripts/compose-up.sh
 ```
 
 При ошибках LLM (5xx, timeout): retry с backoff → fallback на mock-стратегию; процесс не падает.

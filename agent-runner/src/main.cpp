@@ -81,7 +81,8 @@ int main() {
     const char* agent_slot_env = std::getenv("AGENT_SLOT");
     const std::string agent_slot = agent_slot_env ? agent_slot_env : "rival";
     const char* agent_label_env = std::getenv("AGENT_LABEL");
-    const std::string agent_label = agent_label_env ? agent_label_env : (agent_slot == "player" ? "H" : "A");
+    const agent::RobotSlotMeta& meta = agent::robot_meta(agent_slot);
+    const std::string agent_label = agent_label_env ? agent_label_env : meta.label;
 
     std::ofstream log_file;
     if (log_path) {
@@ -155,7 +156,7 @@ int main() {
 
                 json actions = mcp->call_tool("get_available_actions");
                 const auto action_list = actions.value("actions", json::array());
-                const std::string kills_key = agent_slot == "player" ? "player_kills" : "rival_kills";
+                const std::string kills_key = meta.kills_key;
                 std::cout << "Actions: " << action_list.dump()
                           << " | kills " << agent_label << "=" << state.value(kills_key, 0)
                           << "/" << state.value("kills_required", 0)

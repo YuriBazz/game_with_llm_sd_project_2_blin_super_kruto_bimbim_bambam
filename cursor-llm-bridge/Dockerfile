@@ -9,11 +9,13 @@ COPY cursor-llm-bridge/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY cursor-llm-bridge/main.py ./
-COPY agent-runner/prompts/player_llm_prompt.txt /app/prompts/player_llm_prompt.txt
+COPY agent-runner/prompts/robot_llm_prompt.txt /app/prompts/robot_llm_prompt.txt
+RUN sed -e 's/{slot}/player/g' -e 's/{marker}/H/g' -e 's/{other_slot}/rival/g' -e 's/{other_marker}/A/g' \
+    /app/prompts/robot_llm_prompt.txt > /app/prompts/robot_H_llm_prompt.txt
 
 ENV CURSOR_CWD=/workspace
 ENV PORT=8765
-ENV LLM_PROMPT_PATH=/app/prompts/player_llm_prompt.txt
+ENV LLM_PROMPT_PATH=/app/prompts/robot_H_llm_prompt.txt
 ENV HEALTH_PROBE_INTERVAL_SEC=0
 
 EXPOSE 8765

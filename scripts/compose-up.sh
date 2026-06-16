@@ -113,8 +113,8 @@ fi
 
 echo "=== Starting full stack ==="
 echo "  game-service :8080, web-client :5173, ollama :11434, agent-runner-player, agent-runner-rival"
-echo "  Robot A: LLM_PROVIDER=${LLM_PROVIDER:-ollama} OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}"
-echo "  Robot H: LLM_PROVIDER=${LLM_PROVIDER_PLAYER:-ollama} OLLAMA_MODEL=${OLLAMA_MODEL_PLAYER:-llama3.2:1b}"
+echo "  Robot A: LLM_PROVIDER=${ROBOT_A_LLM_PROVIDER:-ollama} OLLAMA_MODEL=${ROBOT_A_OLLAMA_MODEL:-qwen2.5:3b}"
+echo "  Robot H: LLM_PROVIDER=${ROBOT_H_LLM_PROVIDER:-ollama} OLLAMA_MODEL=${ROBOT_H_OLLAMA_MODEL:-llama3.2:1b}"
 if [[ -e /dev/dri/renderD128 ]]; then
   echo "  GPU: AMD (/dev/dri) — Ollama uses Vulkan"
 elif command -v nvidia-smi >/dev/null 2>&1; then

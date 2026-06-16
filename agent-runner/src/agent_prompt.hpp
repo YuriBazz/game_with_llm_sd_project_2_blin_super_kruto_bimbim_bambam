@@ -5,179 +5,116 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <unordered_map>
 
 namespace agent {
 
 using json = nlohmann::json;
+
+struct RobotSlotMeta {
+    std::string slot;
+    std::string label;
+    std::string marker;
+    std::string other_slot;
+    std::string other_marker;
+    std::string room_map_key;
+    std::string room_index_key;
+    std::string kills_key;
+    std::string other_kills_key;
+};
+
+inline const RobotSlotMeta& robot_meta(const std::string& slot) {
+    static const std::unordered_map<std::string, RobotSlotMeta> kBySlot = {
+        {"player", {"player", "H", "H", "rival", "A", "player_room_map", "player_room_index", "player_kills", "rival_kills"}},
+        {"rival",  {"rival",  "A", "A", "player", "H", "rival_room_map",  "rival_room_index",  "rival_kills",  "player_kills"}},
+    };
+    const auto it = kBySlot.find(slot);
+    return it != kBySlot.end() ? it->second : kBySlot.at("rival");
+}
+
+inline std::string replace_all(std::string text, const std::string& from, const std::string& to) {
+    std::size_t pos = 0;
+    while ((pos = text.find(from, pos)) != std::string::npos) {
+        text.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+    return text;
+}
+
+inline const char* kRobotPromptTemplate = R"(You control `{slot}` (marker "{marker}") in a roguelike kill race.
+
+# YOUR MISSION — WIN THE RACE
+Reach `kills_required` monster kills before the other robot (`{other_slot}`, marker "{other_marker}") does.
+Every turn must move you closer to that goal. Wasting turns = losing.
+
+How to win:
+1. Read `current_room_map` — ASCII grid of the room you are in (sent every turn).
+2. Read `nearby_enemies` — each entry has `type`, `hp`, `dist`, `threat` (easy/medium/hard).
+3. Move adjacent (Manhattan = 1), then `attack` until it dies (+1 kill).
+4. Repeat until `your_kills >= kills_required`.
+5. When `{slot}.hp` drops below 40% of `max_hp` and you have a potion → `use_item` with potion.
+6. Walk onto loot tiles — items are picked up automatically when you move onto them.
+7. When no safe target, use room map exits (+) — `scout_around` and corridor paths are fallback only.
+
+# PRIMARY INPUT — current_room_map
+- Your room + adjacent corridor tiles only (no neighboring room interiors).
+- Legend: `#` wall, `.` floor, `C` corridor, `+` room exit, `H`/`A` robots, `G`/`O`/`T`/`R` enemies, `$` loot.
+- `entities` lists world `(x,y)` — use these in `attack`.
+- Do NOT call `scout_around` while local map rows are present.
+
+# FALLBACK — scout_around / paths
+- Use when local map has no rows or you are stuck.
+- `scout_around` caches corridor paths; follow `active_path.next_direction`.
+
+# TARGET SELECTION
+- goblin / rat: attack when adjacent.
+- orc: attack when HP >= 50%.
+- troll: skip only if HP < 50%.
+
+# LOOT (automatic)
+- There is NO pickup action. Loot is collected when you step on its tile.
+
+# HEALING
+- If `{slot}.hp` < 40% of `max_hp` and `use_item` is available → use potion NOW.
+
+# TURN STRUCTURE
+- Each turn you pick exactly ONE action: move, attack, use_item, or scout_around.
+
+# RULES
+- Adjacent = orthogonal only (up/down/left/right), NOT diagonal.
+- You CANNOT walk through enemies — attack them instead.
+- `attack` hits ONLY orthogonally adjacent cells (Manhattan = 1).
+- `{slot}.hp=0`: dead — return `get_game_state` until respawn.
+- Do NOT call `new_game`.
+- The other robot ({other_marker}) is visible but you do NOT control it.
+
+# OUTPUT — ONE line, strict JSON only, no markdown
+Example: {"tool":"attack","arguments":{"target_x":10,"target_y":12}}
+
+Tools:
+- move: {"direction":"up"|"down"|"left"|"right"}
+- attack: {"target_x":INT,"target_y":INT}
+- use_item: {"item_id":"potion"}
+- scout_around: {}
+- get_game_state: {}
+- get_available_actions: {}
+)";
+
+inline std::string system_prompt_for(const std::string& slot) {
+    const RobotSlotMeta& meta = robot_meta(slot);
+    std::string prompt = kRobotPromptTemplate;
+    prompt = replace_all(prompt, "{slot}", meta.slot);
+    prompt = replace_all(prompt, "{marker}", meta.marker);
+    prompt = replace_all(prompt, "{other_slot}", meta.other_slot);
+    prompt = replace_all(prompt, "{other_marker}", meta.other_marker);
+    return prompt;
+}
 
 inline std::string enemy_threat_label(const std::string& type) {
     if (type == "goblin" || type == "rat") return "easy";
     if (type == "orc") return "medium";
     if (type == "troll") return "hard";
     return "medium";
-}
-
-inline const char* kSystemPromptRival = R"(You control `rival` (marker "A") in a roguelike kill race.
-
-# YOUR MISSION — WIN THE RACE
-Reach `kills_required` monster kills before the human (`player`, marker "H") does.
-Every turn must move you closer to that goal. Wasting turns = losing.
-
-How to win:
-1. Read `nearby_enemies` — each entry has `type`, `hp`, `dist`, `threat` (easy/medium/hard).
-2. YOU choose which monster to fight or whether to avoid / explore instead.
-3. Move adjacent (Manhattan = 1), then `attack` until it dies (+1 kill).
-4. Repeat until `your_kills >= kills_required`.
-5. When `rival.hp` drops below 40% of `max_hp` and you have a potion → `use_item` with potion.
-6. Walk onto loot tiles — items are picked up automatically when you move onto them.
-7. When no safe target, explore using `current_room_map` exits (+) — `scout_around` and corridor paths are fallback only.
-
-# PRIMARY INPUT — current_room_map (every turn)
-- Before each step you receive `current_room_map`: your room + adjacent corridor tiles only.
-- Neighboring room interiors are hidden — you cannot see through corridors into other rooms.
-- Legend: `#` wall, `.` floor, `C` corridor, `+` room exit, `H`/`A` robots, `G`/`O`/`T`/`R` enemies, `$` loot.
-- Plan moves and attacks from this map — you see the whole room without calling scout_around.
-- `entities` lists world `(x,y)` for each symbol — use these coordinates in `attack`.
-
-# TARGET SELECTION — your judgment (no autopilot)
-- goblin / rat (~8 HP, easy): good farm targets.
-- orc (~15 HP, medium): fight if HP >= 60% or you have potion/armor.
-- troll (~18–25 HP, hard): often NOT worth it early — can kill you in few hits.
-- Do NOT rush the closest enemy if `threat` is hard and your HP is low.
-- If only hard targets nearby → retreat via corridor path, scout another room, or heal first.
-- `nearby_enemies` is sorted by distance for info only — pick the target YOU prefer.
-
-# FALLBACK EXPLORATION — scout_around / corridor paths
-- Use ONLY when `current_room_map` has no local rows (no room/corridor vision) or you are stuck.
-- `scout_around` caches corridor exit paths; then follow `active_path.next_direction`.
-- Do NOT call scout_around while you already have a local map with rows.
-
-# LOOT (automatic)
-- There is NO pickup action. Loot is collected automatically when you step on its tile.
-- Check `nearby_loot` — if loot is on your current tile, your next `move` onto it (or standing on it after a kill drop) adds it to inventory.
-- Route toward yellow loot dots when safe; potions and gear help you win the kill race.
-
-# HEALING
-- If `rival.hp` < 40% of `max_hp` and `use_item` is available → use potion NOW before fighting more.
-- Do not hoard potions while low HP — dying wastes more time than one potion.
-
-# TURN STRUCTURE
-- Each turn you pick exactly ONE action: move, attack, use_item, or scout_around.
-- scout_around = look around (vision + corridor paths) — counts as your turn.
-- After your action resolves, active nearby enemies may move or attack once.
-- Enemies do NOT act while you are deciding — only after you commit.
-- You only take damage from enemy counter-attacks right after YOUR action.
-
-# RULES
-- Adjacent = orthogonal only (up/down/left/right), NOT diagonal.
-- You CANNOT walk through enemies — attack them instead.
-- Monster HP: goblin ~8 (2 hits), orc ~15 (3 hits), troll ~25 (4+ hits). Your damage ~7.
-- `attack` hits ONLY the orthogonally adjacent cell (Manhattan distance = 1). It is legal ONLY when `attack` is listed in Available actions.
-- If `attack` is NOT in Available actions → you are NOT adjacent → choose `move` or `scout_around`, never `attack`.
-- When `attack` IS available → you are adjacent — pick WHICH adjacent monster to hit (prefer easy targets unless you are strong).
-- `rival.hp=0`: dead — return `get_game_state` until respawn.
-- Do NOT call `new_game`.
-- Human player (H) is visible but you do NOT control them.
-
-# DO NOT WASTE TURNS
-The user message ALREADY contains full state and legal actions.
-- Do NOT call `get_game_state` — you already have the state.
-- Do NOT call `get_available_actions` — listed below.
-
-# YOUR DECISION (every turn goes through you — no auto-actions)
-Decision rule — read `current_room_map`, Available actions, and nearby_enemies, then pick ONE:
-- `rival.hp` < 40% max AND `use_item` listed → use potion.
-- `attack` listed → choose adjacent target from room map / entities; retreat with `move` if only hard targets and low HP.
-- `in_room` true OR corridor map visible → `move` using local map only (room + adjacent corridors).
-- no local map OR stuck → `scout_around` or follow `active_path.next_direction` (fallback).
-- `attack` NOT listed + no room map + no paths → `scout_around` then move.
-
-# OUTPUT — strict JSON only, no markdown, no explanation
-{"tool":"<name>","arguments":{...}}
-
-Tools:
-- move: {"direction":"up"|"down"|"left"|"right"}
-- attack: {"target_x":INT,"target_y":INT}
-- use_item: {"item_id":"potion"}
-- scout_around: {}
-- get_game_state: {}
-- get_available_actions: {}
-)";
-
-inline const char* kSystemPromptPlayer = R"(You control `player` (marker "H") in a roguelike kill race.
-
-# YOUR MISSION — WIN THE RACE
-Reach `kills_required` monster kills before the other robot (`rival`, marker "A") does.
-Every turn must move you closer to that goal. Wasting turns = losing.
-
-How to win:
-1. Read `nearby_enemies` — each entry has `type`, `hp`, `dist`, `threat` (easy/medium/hard).
-2. YOU choose which monster to fight or whether to avoid / explore instead.
-3. Move adjacent (Manhattan = 1), then `attack` until it dies (+1 kill).
-4. Repeat until `your_kills >= kills_required`.
-5. When `player.hp` drops below 40% of `max_hp` and you have a potion → `use_item` with potion.
-6. Walk onto loot tiles — items are picked up automatically when you move onto them.
-7. When no safe target, explore using `current_room_map` exits (+) — `scout_around` and corridor paths are fallback only.
-
-# PRIMARY INPUT — current_room_map (every turn)
-- Before each step you receive `current_room_map`: your room + adjacent corridor tiles only.
-- Neighboring room interiors are hidden — you cannot see through corridors into other rooms.
-- Legend: `#` wall, `.` floor, `C` corridor, `+` room exit, `H`/`A` robots, `G`/`O`/`T`/`R` enemies, `$` loot.
-- Plan moves and attacks from this map — you see the whole room without calling scout_around.
-- `entities` lists world `(x,y)` for each symbol — use these coordinates in `attack`.
-
-# TARGET SELECTION — your judgment (no autopilot)
-- goblin / rat (~8 HP, easy): good farm targets.
-- orc (~15 HP, medium): fight if HP >= 60% or you have potion/armor.
-- troll (~18–25 HP, hard): often NOT worth it early — can kill you in few hits.
-- Do NOT rush the closest enemy if `threat` is hard and your HP is low.
-- If only hard targets nearby → retreat via corridor path, scout another room, or heal first.
-
-# FALLBACK EXPLORATION — scout_around / corridor paths
-- Use ONLY when `current_room_map` has no local rows (no room/corridor vision) or you are stuck.
-- `scout_around` caches corridor paths; follow `active_path.next_direction` when leaving rooms.
-- Do NOT call scout_around while you already have a local map with rows.
-
-# LOOT (automatic)
-- There is NO pickup action. Loot is collected automatically when you step on its tile.
-
-# HEALING
-- If `player.hp` < 40% of `max_hp` and `use_item` is available → use potion NOW before fighting more.
-
-# TURN STRUCTURE
-- Each turn you pick exactly ONE action: move, attack, use_item, or scout_around.
-- After your action resolves, active nearby enemies may move or attack once.
-
-# RULES
-- Adjacent = orthogonal only (up/down/left/right), NOT diagonal.
-- You CANNOT walk through enemies — attack them instead.
-- `attack` hits ONLY the orthogonally adjacent cell (Manhattan distance = 1).
-- When `attack` IS available → you are adjacent — pick WHICH monster to hit (prefer easy targets unless you are strong).
-- `player.hp=0`: dead — return `get_game_state` until respawn.
-- Do NOT call `new_game`.
-- The other robot (A) is visible but you do NOT control them.
-
-# YOUR DECISION (every turn goes through you — no auto-actions)
-Decision rule — read `current_room_map`, Available actions, and nearby_enemies, then pick ONE:
-- `player.hp` < 40% max AND `use_item` listed → use potion.
-- `attack` listed → choose adjacent target from room map / entities.
-- `in_room` true OR corridor map visible → `move` using local map only (room + adjacent corridors).
-- no local map OR stuck → `scout_around` or follow `active_path.next_direction` (fallback).
-
-# OUTPUT — strict JSON only, no markdown, no explanation
-{"tool":"<name>","arguments":{...}}
-
-Tools:
-- move: {"direction":"up"|"down"|"left"|"right"}
-- attack: {"target_x":INT,"target_y":INT}
-- use_item: {"item_id":"potion"}
-- scout_around: {}
-- get_game_state: {}
-- get_available_actions: {}
-)";
-
-inline const char* system_prompt_for(const std::string& slot) {
-    return slot == "player" ? kSystemPromptPlayer : kSystemPromptRival;
 }
 
 inline json practice_state() {
@@ -210,7 +147,7 @@ inline json practice_actions() {
 }
 
 inline std::string room_map_key_for(const std::string& slot) {
-    return slot == "player" ? "player_room_map" : "rival_room_map";
+    return robot_meta(slot).room_map_key;
 }
 
 inline bool cell_visible_in_room_map(int x, int y, const json& room_map) {
@@ -230,6 +167,7 @@ inline bool has_visible_local_map(const json& state, const std::string& slot) {
 }
 
 inline std::string compact_state_for_llm(const json& state, const std::string& slot = "rival") {
+    const RobotSlotMeta& meta = robot_meta(slot);
     json out;
     out["god_mode"] = state.value("god_mode", false);
     out["game_state"] = state.value("game_state", "");
@@ -238,16 +176,16 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
     out["campaign_level"] = state.value("campaign_level", 0);
     out["kills_required"] = state.value("kills_required", 0);
 
-    const std::string self_key = slot == "player" ? "player" : "rival";
-    const std::string other_key = slot == "player" ? "rival" : "player";
-    const std::string self_kills_key = slot == "player" ? "player_kills" : "rival_kills";
-    const std::string other_kills_key = slot == "player" ? "rival_kills" : "player_kills";
+    const std::string& self_key = meta.slot;
+    const std::string& other_key = meta.other_slot;
+    const std::string& self_kills_key = meta.kills_key;
+    const std::string& other_kills_key = meta.other_kills_key;
 
     out["your_kills"] = state.value(self_kills_key, 0);
-    out["human_kills"] = state.value("player_kills", 0);
+    out["other_kills"] = state.value(other_kills_key, 0);
     out["kills_to_win"] = std::max(0, state.value("kills_required", 0) - state.value(self_kills_key, 0));
 
-    const std::string room_map_key = room_map_key_for(slot);
+    const std::string room_map_key = meta.room_map_key;
     const json* room_map_ptr = state.contains(room_map_key) ? &state[room_map_key] : nullptr;
 
     int px = 0;
@@ -260,7 +198,7 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
         py = r.value("y", 0);
         hp = r.value("hp", 0);
         max_hp = std::max(1, r.value("max_hp", 1));
-        out["rival"] = {
+        out[self_key] = {
             {"x", px},
             {"y", py},
             {"hp", hp},
@@ -272,12 +210,12 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
     }
 
     if (state.contains(other_key)) {
-        const auto& h = state[other_key];
-        if (!room_map_ptr || cell_visible_in_room_map(h.value("x", 0), h.value("y", 0), *room_map_ptr)) {
-            out["human"] = {
-                {"x", h.value("x", 0)},
-                {"y", h.value("y", 0)},
-                {"hp", h.value("hp", 0)},
+        const auto& other = state[other_key];
+        if (!room_map_ptr || cell_visible_in_room_map(other.value("x", 0), other.value("y", 0), *room_map_ptr)) {
+            out[other_key] = {
+                {"x", other.value("x", 0)},
+                {"y", other.value("y", 0)},
+                {"hp", other.value("hp", 0)},
                 {"kills", state.value(other_kills_key, 0)}
             };
         }
@@ -340,10 +278,10 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
     out["loot_auto_pickup_on_move"] = true;
 
     if (room_map_ptr) {
-        out["current_room_map"] = *room_map_ptr;
-        if (room_map_ptr->contains("enemies")) {
-            out["enemies_on_map"] = (*room_map_ptr)["enemies"];
-        }
+        out["in_room"] = room_map_ptr->value("in_room", false);
+        out["in_corridor"] = room_map_ptr->value("in_corridor", false);
+        out["room_index"] = room_map_ptr->value("room_index", -1);
+        // ASCII room map is prepended separately — omit rows/visible_cell_keys here.
     }
 
     return out.dump();
@@ -357,7 +295,7 @@ inline bool actions_include(const json& actions, const std::string& name) {
 }
 
 inline bool has_potion(const json& state, const std::string& slot = "rival") {
-    const std::string key = slot == "player" ? "player" : "rival";
+    const std::string& key = robot_meta(slot).slot;
     if (!state.contains(key)) return false;
     for (const auto& item : state[key].value("inventory", json::array())) {
         if (item.value("id", "") == "potion" && item.value("count", 0) > 0) return true;
@@ -369,8 +307,7 @@ inline std::string format_room_map_for_prompt(const json& room_map) {
     if (!room_map.is_object() || room_map.empty()) return "";
 
     std::string text = "Current room map:\n";
-    text += room_map.value("legend", "");
-    text += "\nroom_index=" + std::to_string(room_map.value("room_index", -1));
+    text += "room_index=" + std::to_string(room_map.value("room_index", -1));
     text += " in_room=" + std::string(room_map.value("in_room", false) ? "true" : "false");
     if (room_map.value("in_corridor", false) && (!room_map.contains("rows") || room_map["rows"].empty())) {
         text += "\n" + room_map.value("hint", "In corridor — use scout_around fallback.");
@@ -392,8 +329,6 @@ inline std::string format_room_map_for_prompt(const json& room_map) {
     }
     if (room_map.contains("enemies") && !room_map["enemies"].empty()) {
         text += "\nenemies=" + room_map["enemies"].dump();
-    } else if (room_map.contains("entities") && !room_map["entities"].empty()) {
-        text += "\nentities=" + room_map["entities"].dump();
     }
     if (room_map.contains("exits") && !room_map["exits"].empty()) {
         text += "\nexits=" + room_map["exits"].dump();
@@ -410,14 +345,15 @@ inline std::string build_user_prompt(const std::string& state_json,
     const bool can_attack = actions_include(actions, "attack");
     const bool can_move = actions_include(actions, "move");
     const bool can_heal = actions_include(actions, "use_item");
+    const RobotSlotMeta& meta = robot_meta(slot);
     const bool has_local_map = has_visible_local_map(full_state, slot);
 
     std::string prompt;
-    if (full_state.contains(room_map_key_for(slot))) {
-        prompt = format_room_map_for_prompt(full_state[room_map_key_for(slot)]) + "\n\n";
+    if (full_state.contains(meta.room_map_key)) {
+        prompt = format_room_map_for_prompt(full_state[meta.room_map_key]) + "\n\n";
     }
     prompt += std::string("Current game state JSON:\n") + state_json;
-    if (!path_info.empty()) {
+    if (!path_info.empty() && !has_local_map) {
         prompt += "\n\nCorridor path cache (fallback navigation):\n" + path_info.dump();
     }
     prompt += "\n\nAvailable actions (only these are legal this turn):\n" + actions.dump();
@@ -425,8 +361,8 @@ inline std::string build_user_prompt(const std::string& state_json,
         prompt += "\n\nPrevious turn feedback:\n" + feedback;
     }
     prompt += "\n\nYour turn — pick ONE action from Available actions only.";
-    if (full_state.contains(slot == "player" ? "player" : "rival")) {
-        const auto& actor = full_state[slot == "player" ? "player" : "rival"];
+    if (full_state.contains(meta.slot)) {
+        const auto& actor = full_state[meta.slot];
         const int hp = actor.value("hp", 0);
         const int max_hp = std::max(1, actor.value("max_hp", 1));
         if (can_heal && has_potion(full_state, slot) && hp * 100 < max_hp * 40) {
@@ -454,7 +390,7 @@ inline std::string build_user_prompt(const std::string& state_json,
             }
         }
     }
-    prompt += " JSON only.";
+    prompt += " JSON only. move must use arguments.direction (up/down/left/right), not coordinates.";
     return prompt;
 }
 

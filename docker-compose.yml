@@ -39,15 +39,15 @@ services:
     environment:
       - AGENT_SLOT=rival
       - AGENT_LABEL=A
-      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_PROVIDER=${ROBOT_A_LLM_PROVIDER:-ollama}
       - MCP_SERVER_PATH=/usr/local/bin/mcp_server
       - GAME_SERVICE_HOST=game-service
       - GAME_SERVICE_PORT=8080
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - OLLAMA_MODEL=${ROBOT_A_OLLAMA_MODEL:-qwen2.5:3b}
       - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_MODEL=${ROBOT_A_OPENAI_MODEL:-gpt-4o-mini}
       - MAX_STEPS=${MAX_STEPS:-500}
       - MAX_TOKENS=${MAX_TOKENS:-5000}
       - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-50000}
@@ -71,15 +71,15 @@ services:
     environment:
       - AGENT_SLOT=player
       - AGENT_LABEL=H
-      - LLM_PROVIDER=${LLM_PROVIDER_PLAYER:-ollama}
+      - LLM_PROVIDER=${ROBOT_H_LLM_PROVIDER:-ollama}
       - MCP_SERVER_PATH=/usr/local/bin/mcp_server
       - GAME_SERVICE_HOST=game-service
       - GAME_SERVICE_PORT=8080
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL_PLAYER:-qwen2.5:3b}
+      - OLLAMA_MODEL=${ROBOT_H_OLLAMA_MODEL:-qwen2.5:3b}
       - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL_PLAYER:-gpt-4o-mini}
+      - OPENAI_MODEL=${ROBOT_H_OPENAI_MODEL:-gpt-4o-mini}
       - MAX_STEPS=${MAX_STEPS:-500}
       - MAX_TOKENS=${MAX_TOKENS:-5000}
       - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-50000}
@@ -132,8 +132,8 @@ services:
       - ${RENDER_GID:-989}
       - ${VIDEO_GID:-985}
     environment:
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
-      - OLLAMA_MODEL_PLAYER=${OLLAMA_MODEL_PLAYER:-llama3.2:1b}
+      - ROBOT_A_OLLAMA_MODEL=${ROBOT_A_OLLAMA_MODEL:-qwen2.5:3b}
+      - ROBOT_H_OLLAMA_MODEL=${ROBOT_H_OLLAMA_MODEL:-llama3.2:1b}
       - OLLAMA_KEEP_ALIVE=-1
       - OLLAMA_VULKAN=${OLLAMA_VULKAN:-1}
       - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-1}
@@ -141,7 +141,7 @@ services:
       # AMD Renoir/Lucienne iGPU (gfx1030) — drop if you have NVIDIA + nvidia-container-toolkit
       - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
     entrypoint: /bin/sh
-    command: -c "ollama serve & sleep 5 && ollama pull \"$$OLLAMA_MODEL\" && ollama pull \"$$OLLAMA_MODEL_PLAYER\" && tail -f /dev/null"
+    command: -c "ollama serve & sleep 5 && ollama pull \"$$ROBOT_A_OLLAMA_MODEL\" && ollama pull \"$$ROBOT_H_OLLAMA_MODEL\" && tail -f /dev/null"
     healthcheck:
       test: ["CMD", "ollama", "ps"]
       interval: 15s

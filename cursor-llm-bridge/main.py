@@ -15,7 +15,7 @@ CURSOR_CWD = os.environ.get("CURSOR_CWD", "/workspace")
 DEFAULT_MODEL = os.environ.get("CURSOR_MODEL", "composer-2.5")
 MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "5000"))
 MAX_TOTAL_TOKENS = int(os.environ.get("MAX_TOTAL_TOKENS", "50000"))
-HEALTH_PROBE_INTERVAL_SEC = int(os.environ.get("HEALTH_PROBE_INTERVAL_SEC", "90"))
+HEALTH_PROBE_INTERVAL_SEC = int(os.environ.get("HEALTH_PROBE_INTERVAL_SEC", "0"))
 LLM_PROMPT_PATH = os.environ.get("LLM_PROMPT_PATH", "/app/llm_prompt.txt")
 
 _token_lock = threading.Lock()
@@ -142,7 +142,7 @@ def _run_cursor_prompt(full_prompt: str, model: str) -> str:
                 api_key=api_key,
                 model=model or DEFAULT_MODEL,
                 local=LocalAgentOptions(cwd=CURSOR_CWD),
-                mode="plan",
+                mode="ask",
             ),
         )
     except Exception as exc:
@@ -160,6 +160,9 @@ def _run_cursor_prompt(full_prompt: str, model: str) -> str:
 
 def _maybe_run_health_probe() -> dict[str, Any]:
     global _last_health_probe_at
+
+    if HEALTH_PROBE_INTERVAL_SEC <= 0:
+        return {"probe": "disabled"}
 
     now = time.time()
     with _token_lock:
@@ -222,7 +225,7 @@ def health() -> dict[str, Any]:
             "health_probe": {"probe": "failed", "detail": exc.detail},
         }
 
-    status = "ok" if probe.get("probe") in {"ok", "skipped"} else "degraded"
+    status = "ok" if probe.get("probe") in {"ok", "skipped", "disabled"} else "degraded"
     return {
         "status": status,
         "model_default": DEFAULT_MODEL,

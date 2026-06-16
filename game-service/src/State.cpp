@@ -331,10 +331,8 @@ void State::spawn_enemies(int count) {
 
     while (spawned < count && attempts < max_attempts) {
         ++attempts;
-        const int room_idx = map.rooms.size() <= 1
-            ? 0
-            : static_cast<size_t>(rng.get_random(1, static_cast<int>(map.rooms.size()) - 1));
-        const auto& room = map.rooms[room_idx];
+        const int room_idx = rng.get_random(0, static_cast<int>(map.rooms.size()) - 1);
+        const auto& room = map.rooms[static_cast<size_t>(room_idx)];
 
         const int enemy_x = room.x + rng.get_random(0, room.w - 1);
         const int enemy_y = room.y + rng.get_random(0, room.h - 1);
@@ -343,6 +341,8 @@ void State::spawn_enemies(int count) {
         if (map.grid[idx] != TileType::Floor || entity_grid[idx] != -1) continue;
         if (enemy_x == player.x && enemy_y == player.y) continue;
         if (enemy_x == rival.x && enemy_y == rival.y) continue;
+        if (std::abs(enemy_x - player.x) + std::abs(enemy_y - player.y) < 2) continue;
+        if (std::abs(enemy_x - rival.x) + std::abs(enemy_y - rival.y) < 2) continue;
 
         const EnemyType type = rng.get_random_enum<EnemyType>();
         const EnemyTypeStats stats = enemy_stats_for(type);

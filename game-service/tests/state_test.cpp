@@ -34,6 +34,18 @@ int main() {
         }
     }
 
+    const int player_room = state.room_index_at(state.player.x, state.player.y);
+    if (player_room >= 0) {
+        bool enemy_in_player_room = false;
+        for (const auto& enemy : state.enemies) {
+            if (state.room_index_at(enemy.x, enemy.y) == player_room) {
+                enemy_in_player_room = true;
+                break;
+            }
+        }
+        assert(enemy_in_player_room);
+    }
+
     nlohmann::json serialized;
     game::to_json(serialized, state);
     assert(serialized.contains("game_over"));

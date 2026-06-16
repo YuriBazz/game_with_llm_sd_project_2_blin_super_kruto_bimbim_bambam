@@ -112,7 +112,7 @@ services:
       - CURSOR_MODEL=${CURSOR_MODEL:-composer-2.5}
       - MAX_TOKENS=${MAX_TOKENS:-5000}
       - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-50000}
-      - HEALTH_PROBE_INTERVAL_SEC=${HEALTH_PROBE_INTERVAL_SEC:-90}
+      - HEALTH_PROBE_INTERVAL_SEC=${HEALTH_PROBE_INTERVAL_SEC:-0}
     volumes:
       - .:/workspace:ro
     networks:

@@ -89,12 +89,23 @@ flowchart TB
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ROBOT_A_LLM_PROVIDER` | `ollama` | LLM для робота A (`agent-runner-rival`) |
+| `ROBOT_A_LLM_PROVIDER` | `ollama` | LLM для робота A (`agent-runner-rival`): `ollama`, `openai`, `cursor` |
+| `ROBOT_A_LLM_PROVIDER_FALLBACK` | `ollama` | Fallback, если `ROBOT_A_LLM_PROVIDER` не задан |
 | `ROBOT_A_OLLAMA_MODEL` | `qwen2.5:3b` | Модель Ollama для A; должна быть в pull ollama |
+| `ROBOT_A_OLLAMA_MODEL_FALLBACK` | `qwen2.5:3b` | Fallback модели Ollama для A |
 | `ROBOT_A_OPENAI_MODEL` | `gpt-4o-mini` | Модель OpenAI для A |
-| `ROBOT_H_LLM_PROVIDER` | `ollama` | LLM для робота H (`agent-runner-player`) |
+| `ROBOT_A_OPENAI_MODEL_FALLBACK` | `gpt-4o-mini` | Fallback модели OpenAI для A |
+| `ROBOT_A_CURSOR_MODEL` | `composer-2.5` | Модель Cursor Composer для A |
+| `ROBOT_A_CURSOR_BRIDGE_URL` | `http://cursor-llm-bridge-a:8765` | URL bridge внутри compose |
+| `ROBOT_H_LLM_PROVIDER` | `ollama` | LLM для робота H (`agent-runner-player`): `ollama`, `openai`, `cursor` |
+| `ROBOT_H_LLM_PROVIDER_FALLBACK` | `ollama` | Fallback, если `ROBOT_H_LLM_PROVIDER` не задан |
 | `ROBOT_H_OLLAMA_MODEL` | `llama3.2:1b` | Модель Ollama для H |
+| `ROBOT_H_OLLAMA_MODEL_FALLBACK` | `llama3.2:1b` | Fallback модели Ollama для H |
 | `ROBOT_H_OPENAI_MODEL` | `gpt-4o-mini` | Модель OpenAI для H |
+| `ROBOT_H_OPENAI_MODEL_FALLBACK` | `gpt-4o-mini` | Fallback модели OpenAI для H |
+| `ROBOT_H_CURSOR_MODEL` | `composer-2.5` | Модель Cursor Composer для H |
+| `ROBOT_H_CURSOR_BRIDGE_URL` | `http://cursor-llm-bridge-h:8765` | URL bridge внутри compose |
+| `CURSOR_API_KEY` | — | Общий ключ Cursor API (нужен, если хотя бы один робот с `LLM_PROVIDER=cursor`) |
 | `OLLAMA_URL` | `http://ollama:11434` | Endpoint Ollama (в compose) |
 | `OLLAMA_NUM_GPU` | — | `0` = CPU-only при проблемах с GPU |
 | `OPENAI_API_KEY` | — | Ключ OpenAI (если провайдер `openai`) |
@@ -119,10 +130,31 @@ AMD iGPU / NVIDIA — см. комментарии в `.env.example` и `docker-
 
 ### Провайдеры
 
+`ROBOT_A_*` и `ROBOT_H_*` задают LLM **независимо** для каждого робота:
+
+| `ROBOT_*_LLM_PROVIDER` | Кто отвечает за LLM |
+|------------------------|---------------------|
+| `ollama` | `agent-runner` → Ollama |
+| `openai` | `agent-runner` → OpenAI API |
+| `cursor` | `agent-runner` → `cursor-llm-bridge-{a\|h}` (нужен `CURSOR_API_KEY`) |
+
 ```bash
-LLM_PROVIDER=mock ROBOT_A_LLM_PROVIDER=mock ROBOT_H_LLM_PROVIDER=mock ./scripts/compose-up.sh
 ROBOT_A_LLM_PROVIDER=ollama ROBOT_H_LLM_PROVIDER=ollama ./scripts/compose-up.sh
 ROBOT_A_LLM_PROVIDER=openai ROBOT_H_LLM_PROVIDER=openai ./scripts/compose-up.sh
+ROBOT_H_LLM_PROVIDER=cursor CURSOR_API_KEY=... ./scripts/compose-up.sh
+ROBOT_A_LLM_PROVIDER=cursor ROBOT_H_LLM_PROVIDER=cursor CURSOR_API_KEY=... ./scripts/compose-up.sh
+```
+
+Bridge стартует **только** для роботов с `ROBOT_*_LLM_PROVIDER=cursor` и при непустом `CURSOR_API_KEY`.
+
+Для каждого `ROBOT_{A|H}_*` есть парный `ROBOT_{A|H}_*_FALLBACK` — используется, если основная переменная не задана. Пример `.env`:
+
+```env
+ROBOT_A_LLM_PROVIDER_FALLBACK=ollama
+ROBOT_A_OLLAMA_MODEL_FALLBACK=qwen2.5:3b
+ROBOT_H_LLM_PROVIDER_FALLBACK=ollama
+ROBOT_H_OLLAMA_MODEL_FALLBACK=qwen2.5:3b
+CURSOR_API_KEY=
 ```
 
 При ошибках LLM (5xx, timeout): retry с backoff → fallback на mock-стратегию; процесс не падает.
@@ -167,7 +199,7 @@ chmod +x eval/run_eval.sh
 | MCP server boilerplate, web-client scaffold | Сгенерировано AI, доработано вручную |
 | game logic, agent loop, Docker wiring | В основном вручную |
 | audit reports (`report2.md`, `report3.md`), eval script | AI-assisted |
-| **FakeLLM** | `LLM_PROVIDER=mock` в agent-runner; класс `FakeLLM` в `examples/enemy_llm_agent.py` |
+`ROBOT_A_LLM_PROVIDER` / `ROBOT_H_LLM_PROVIDER` (или `*_FALLBACK`) в agent-runner; класс `FakeLLM` в `examples/enemy_llm_agent.py`
 
 ## GoF Patterns
 

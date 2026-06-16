@@ -110,6 +110,23 @@ inline std::string system_prompt_for(const std::string& slot) {
     return prompt;
 }
 
+inline std::string robot_env_key(const std::string& slot, const std::string& suffix) {
+    return "ROBOT_" + robot_meta(slot).label + "_" + suffix;
+}
+
+inline const char* robot_env_or_fallback(const std::string& slot,
+                                         const std::string& suffix) {
+    const std::string key = robot_env_key(slot, suffix);
+    if (const char* value = std::getenv(key.c_str())) {
+        return value;
+    }
+    const std::string fallback_key = key + "_FALLBACK";
+    if (const char* value = std::getenv(fallback_key.c_str())) {
+        return value;
+    }
+    return nullptr;
+}
+
 inline std::string enemy_threat_label(const std::string& type) {
     if (type == "goblin" || type == "rat") return "easy";
     if (type == "orc") return "medium";

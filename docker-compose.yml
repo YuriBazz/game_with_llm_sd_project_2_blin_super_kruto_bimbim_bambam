@@ -39,15 +39,17 @@ services:
     environment:
       - AGENT_SLOT=rival
       - AGENT_LABEL=A
-      - LLM_PROVIDER=${ROBOT_A_LLM_PROVIDER:-ollama}
+      - ROBOT_A_LLM_PROVIDER=${ROBOT_A_LLM_PROVIDER:-${ROBOT_A_LLM_PROVIDER_FALLBACK:-ollama}}
       - MCP_SERVER_PATH=/usr/local/bin/mcp_server
       - GAME_SERVICE_HOST=game-service
       - GAME_SERVICE_PORT=8080
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
-      - OLLAMA_MODEL=${ROBOT_A_OLLAMA_MODEL:-qwen2.5:3b}
+      - ROBOT_A_OLLAMA_MODEL=${ROBOT_A_OLLAMA_MODEL:-${ROBOT_A_OLLAMA_MODEL_FALLBACK:-qwen2.5:3b}}
       - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${ROBOT_A_OPENAI_MODEL:-gpt-4o-mini}
+      - ROBOT_A_OPENAI_MODEL=${ROBOT_A_OPENAI_MODEL:-${ROBOT_A_OPENAI_MODEL_FALLBACK:-gpt-4o-mini}}
+      - ROBOT_A_CURSOR_MODEL=${ROBOT_A_CURSOR_MODEL:-composer-2.5}
+      - ROBOT_A_CURSOR_BRIDGE_URL=${ROBOT_A_CURSOR_BRIDGE_URL:-http://cursor-llm-bridge-a:8765}
       - MAX_STEPS=${MAX_STEPS:-500}
       - MAX_TOKENS=${MAX_TOKENS:-5000}
       - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-50000}
@@ -71,15 +73,17 @@ services:
     environment:
       - AGENT_SLOT=player
       - AGENT_LABEL=H
-      - LLM_PROVIDER=${ROBOT_H_LLM_PROVIDER:-ollama}
+      - ROBOT_H_LLM_PROVIDER=${ROBOT_H_LLM_PROVIDER:-${ROBOT_H_LLM_PROVIDER_FALLBACK:-ollama}}
       - MCP_SERVER_PATH=/usr/local/bin/mcp_server
       - GAME_SERVICE_HOST=game-service
       - GAME_SERVICE_PORT=8080
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
-      - OLLAMA_MODEL=${ROBOT_H_OLLAMA_MODEL:-qwen2.5:3b}
+      - ROBOT_H_OLLAMA_MODEL=${ROBOT_H_OLLAMA_MODEL:-${ROBOT_H_OLLAMA_MODEL_FALLBACK:-qwen2.5:3b}}
       - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${ROBOT_H_OPENAI_MODEL:-gpt-4o-mini}
+      - ROBOT_H_OPENAI_MODEL=${ROBOT_H_OPENAI_MODEL:-${ROBOT_H_OPENAI_MODEL_FALLBACK:-gpt-4o-mini}}
+      - ROBOT_H_CURSOR_MODEL=${ROBOT_H_CURSOR_MODEL:-composer-2.5}
+      - ROBOT_H_CURSOR_BRIDGE_URL=${ROBOT_H_CURSOR_BRIDGE_URL:-http://cursor-llm-bridge-h:8765}
       - MAX_STEPS=${MAX_STEPS:-500}
       - MAX_TOKENS=${MAX_TOKENS:-5000}
       - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-50000}
@@ -100,24 +104,51 @@ services:
     networks:
       - game-net
 
-  cursor-llm-bridge:
+  cursor-llm-bridge-h:
+    profiles:
+      - cursor-h
     build:
       context: .
       dockerfile: cursor-llm-bridge/Dockerfile
     ports:
       - "8765:8765"
     environment:
+      - ROBOT_LABEL=H
       - CURSOR_API_KEY=${CURSOR_API_KEY:-}
-      - CURSOR_CWD=/workspace
-      - CURSOR_MODEL=${CURSOR_MODEL:-composer-2.5}
-      - MAX_TOKENS=${MAX_TOKENS:-5000}
-      - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-50000}
-      - HEALTH_PROBE_INTERVAL_SEC=${HEALTH_PROBE_INTERVAL_SEC:-0}
+      - ROBOT_H_CURSOR_CWD=/workspace
+      - ROBOT_H_CURSOR_MODEL=${ROBOT_H_CURSOR_MODEL:-composer-2.5}
+      - ROBOT_H_MAX_TOKENS=${ROBOT_H_MAX_TOKENS:-5000}
+      - ROBOT_H_MAX_TOTAL_TOKENS=${ROBOT_H_MAX_TOTAL_TOKENS:-50000}
+      - ROBOT_H_HEALTH_PROBE_INTERVAL_SEC=${ROBOT_H_HEALTH_PROBE_INTERVAL_SEC:-0}
+      - ROBOT_H_LLM_PROMPT_PATH=/app/prompts/robot_H_llm_prompt.txt
     volumes:
       - .:/workspace:ro
     networks:
       - game-net
-    restart: unless-stopped
+    restart: "no"
+
+  cursor-llm-bridge-a:
+    profiles:
+      - cursor-a
+    build:
+      context: .
+      dockerfile: cursor-llm-bridge/Dockerfile
+    ports:
+      - "8766:8765"
+    environment:
+      - ROBOT_LABEL=A
+      - CURSOR_API_KEY=${CURSOR_API_KEY:-}
+      - ROBOT_A_CURSOR_CWD=/workspace
+      - ROBOT_A_CURSOR_MODEL=${ROBOT_A_CURSOR_MODEL:-composer-2.5}
+      - ROBOT_A_MAX_TOKENS=${ROBOT_A_MAX_TOKENS:-5000}
+      - ROBOT_A_MAX_TOTAL_TOKENS=${ROBOT_A_MAX_TOTAL_TOKENS:-50000}
+      - ROBOT_A_HEALTH_PROBE_INTERVAL_SEC=${ROBOT_A_HEALTH_PROBE_INTERVAL_SEC:-0}
+      - ROBOT_A_LLM_PROMPT_PATH=/app/prompts/robot_A_llm_prompt.txt
+    volumes:
+      - .:/workspace:ro
+    networks:
+      - game-net
+    restart: "no"
 
   ollama:
     image: ollama/ollama:latest
@@ -132,8 +163,8 @@ services:
       - ${RENDER_GID:-989}
       - ${VIDEO_GID:-985}
     environment:
-      - ROBOT_A_OLLAMA_MODEL=${ROBOT_A_OLLAMA_MODEL:-qwen2.5:3b}
-      - ROBOT_H_OLLAMA_MODEL=${ROBOT_H_OLLAMA_MODEL:-llama3.2:1b}
+      - ROBOT_A_OLLAMA_MODEL=${ROBOT_A_OLLAMA_MODEL:-${ROBOT_A_OLLAMA_MODEL_FALLBACK:-qwen2.5:3b}}
+      - ROBOT_H_OLLAMA_MODEL=${ROBOT_H_OLLAMA_MODEL:-${ROBOT_H_OLLAMA_MODEL_FALLBACK:-llama3.2:1b}}
       - OLLAMA_KEEP_ALIVE=-1
       - OLLAMA_VULKAN=${OLLAMA_VULKAN:-1}
       - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-1}

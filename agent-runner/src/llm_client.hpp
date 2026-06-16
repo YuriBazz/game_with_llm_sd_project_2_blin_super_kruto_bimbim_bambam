@@ -32,6 +32,8 @@ private:
     std::string ollama_model_;
     std::string openai_api_key_;
     std::string openai_model_;
+    std::string cursor_bridge_url_;
+    std::string cursor_model_;
     int max_retries_ = 3;
     int total_tokens_used_ = 0;
     int steps_counter_ = 0;
@@ -339,6 +341,35 @@ private:
                 "Content-Type: application/json",
                 "Authorization: Bearer " + openai_api_key_
             }
+        );
+        if (!response) return std::nullopt;
+
+        try {
+            json parsed = json::parse(*response);
+            if (parsed.contains("usage")) {
+                total_tokens_used_ += parsed["usage"].value("total_tokens", 0);
+            }
+            return parsed["choices"][0]["message"]["content"].get<std::string>();
+        } catch (...) {}
+        return std::nullopt;
+    }
+
+    std::optional<std::string> call_cursor_bridge(const std::string& prompt) {
+        if (cursor_bridge_url_.empty()) return std::nullopt;
+
+        json body = {
+            {"model", cursor_model_},
+            {"messages", json::array({
+                json{{"role", "system"}, {"content", system_prompt()}},
+                json{{"role", "user"}, {"content", prompt}}
+            })}
+        };
+
+        const auto response = http_post_json(
+            cursor_bridge_url_ + "/v1/chat/completions",
+            body,
+            {"Content-Type: application/json"},
+            300L
         );
         if (!response) return std::nullopt;
 
@@ -1090,6 +1121,8 @@ public:
               const std::string& ollama_model,
               const std::string& openai_api_key,
               const std::string& openai_model,
+              const std::string& cursor_bridge_url,
+              const std::string& cursor_model,
               double temperature,
               int max_predict_tokens,
               int ollama_num_gpu)
@@ -1098,6 +1131,8 @@ public:
           ollama_model_(ollama_model),
           openai_api_key_(openai_api_key),
           openai_model_(openai_model),
+          cursor_bridge_url_(cursor_bridge_url),
+          cursor_model_(cursor_model),
           temperature_(temperature),
           max_predict_tokens_(max_predict_tokens),
           ollama_num_gpu_(ollama_num_gpu),
@@ -1136,7 +1171,27 @@ public:
         run_practice_turn();
     }
 
+    void wait_for_cursor_bridge() {
+        std::cout << "Waiting for Cursor bridge at " << cursor_bridge_url_ << "..." << std::endl;
+        for (int attempt = 0; attempt < 300; ++attempt) {
+            const auto response = http_get(cursor_bridge_url_ + "/health", 5L);
+            if (response && response->find("\"status\":\"ok\"") != std::string::npos) {
+                std::cout << "Cursor bridge ready." << std::endl;
+                return;
+            }
+            if (attempt % 10 == 0) {
+                std::cout << "Cursor bridge not ready yet..." << std::endl;
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        std::cerr << "Cursor bridge not ready after timeout." << std::endl;
+    }
+
     void wait_for_provider_ready(bool skip_practice_warmup = false) {
+        if (provider_ == "cursor") {
+            wait_for_cursor_bridge();
+            return;
+        }
         if (provider_ != "ollama") return;
 
         std::cout << "Waiting for Ollama model " << ollama_model_ << "..." << std::endl;
@@ -1439,6 +1494,8 @@ public:
 
             if (provider_ == "ollama") {
                 raw = call_ollama(prompt);
+            } else if (provider_ == "cursor") {
+                raw = call_cursor_bridge(prompt);
             } else if (provider_ == "openai") {
                 raw = call_openai(prompt);
             } else {
@@ -1522,13 +1579,26 @@ public:
     }
 
     static std::unique_ptr<LLMClient> from_env() {
-        const char* provider = std::getenv("LLM_PROVIDER");
+        const char* slot_env = std::getenv("AGENT_SLOT");
+        const std::string slot = slot_env ? slot_env : "rival";
+        const char* provider = agent::robot_env_or_fallback(slot, "LLM_PROVIDER");
         const std::string provider_name = provider ? provider : "mock";
 
         const char* ollama_url = std::getenv("OLLAMA_URL");
-        const char* ollama_model = std::getenv("OLLAMA_MODEL");
+        const char* ollama_model = agent::robot_env_or_fallback(slot, "OLLAMA_MODEL");
         const char* openai_key = std::getenv("OPENAI_API_KEY");
-        const char* openai_model = std::getenv("OPENAI_MODEL");
+        const char* openai_model = agent::robot_env_or_fallback(slot, "OPENAI_MODEL");
+        const char* cursor_model = agent::robot_env_or_fallback(slot, "CURSOR_MODEL");
+        const char* cursor_bridge = agent::robot_env_or_fallback(slot, "CURSOR_BRIDGE_URL");
+        const std::string& label = agent::robot_meta(slot).label;
+        const std::string default_bridge = (label == "H")
+            ? "http://cursor-llm-bridge-h:8765"
+            : "http://cursor-llm-bridge-a:8765";
+        const std::string cursor_bridge_url =
+            provider_name == "cursor" ? (cursor_bridge ? cursor_bridge : default_bridge) : "";
+        const std::string cursor_model_name =
+            cursor_model ? cursor_model : "composer-2.5";
+
         const char* temperature = std::getenv("TEMPERATURE");
         const char* max_tokens = std::getenv("MAX_TOKENS");
 
@@ -1547,6 +1617,8 @@ public:
             ollama_model ? ollama_model : "qwen2.5:7b",
             openai_key ? openai_key : "",
             openai_model ? openai_model : "gpt-4o-mini",
+            cursor_bridge_url,
+            cursor_model_name,
             temp,
             predict,
             num_gpu

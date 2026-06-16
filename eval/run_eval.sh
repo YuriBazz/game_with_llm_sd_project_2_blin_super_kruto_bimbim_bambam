@@ -40,7 +40,14 @@ for spec in "${AGENTS[@]}"; do
     log_file="$OUT_DIR/${agent}_${slot}_seed_${seed}.log"
 
     echo "=== $agent/$slot run $i seed=$seed ==="
-    if AGENT_SLOT="$slot" LLM_PROVIDER="$agent" GAME_SEED="$seed" MAX_STEPS=80 \
+    env_args=()
+    if [[ "$slot" == "player" ]]; then
+      env_args+=(ROBOT_H_LLM_PROVIDER="$agent")
+    else
+      env_args+=(ROBOT_A_LLM_PROVIDER="$agent")
+    fi
+
+    if AGENT_SLOT="$slot" "${env_args[@]}" GAME_SEED="$seed" MAX_STEPS=80 \
       docker compose run --rm --no-deps "agent-runner-${slot}" > "$log_file" 2>&1; then
       if grep -qE "Round finished|Level complete" "$log_file"; then
         success=$((success + 1))

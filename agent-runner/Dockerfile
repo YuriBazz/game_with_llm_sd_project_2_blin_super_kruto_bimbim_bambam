@@ -38,7 +38,6 @@ COPY --from=mcp-builder /app/mcp-server/build/mcp_server /usr/local/bin/mcp_serv
 COPY --from=agent-builder /app/build/agent_runner /usr/local/bin/agent_runner
 
 ENV MCP_SERVER_PATH=/usr/local/bin/mcp_server
-ENV LLM_PROVIDER=ollama
 ENV MAX_STEPS=100
 ENV GAME_SEED=42
 

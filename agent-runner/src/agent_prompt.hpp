@@ -209,6 +209,26 @@ inline json practice_actions() {
     return json{{"actions", json::array({"move", "attack", "use_item"})}};
 }
 
+inline std::string room_map_key_for(const std::string& slot) {
+    return slot == "player" ? "player_room_map" : "rival_room_map";
+}
+
+inline bool cell_visible_in_room_map(int x, int y, const json& room_map) {
+    if (!room_map.is_object() || !room_map.contains("visible_cell_keys")) return false;
+    const std::string key = std::to_string(x) + "," + std::to_string(y);
+    for (const auto& entry : room_map["visible_cell_keys"]) {
+        if (entry.is_string() && entry.get<std::string>() == key) return true;
+    }
+    return false;
+}
+
+inline bool has_visible_local_map(const json& state, const std::string& slot) {
+    const std::string key = room_map_key_for(slot);
+    if (!state.contains(key) || !state[key].is_object()) return false;
+    const auto& room_map = state[key];
+    return room_map.contains("rows") && room_map["rows"].is_array() && !room_map["rows"].empty();
+}
+
 inline std::string compact_state_for_llm(const json& state, const std::string& slot = "rival") {
     json out;
     out["god_mode"] = state.value("god_mode", false);
@@ -226,6 +246,9 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
     out["your_kills"] = state.value(self_kills_key, 0);
     out["human_kills"] = state.value("player_kills", 0);
     out["kills_to_win"] = std::max(0, state.value("kills_required", 0) - state.value(self_kills_key, 0));
+
+    const std::string room_map_key = room_map_key_for(slot);
+    const json* room_map_ptr = state.contains(room_map_key) ? &state[room_map_key] : nullptr;
 
     int px = 0;
     int py = 0;
@@ -250,9 +273,7 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
 
     if (state.contains(other_key)) {
         const auto& h = state[other_key];
-        const std::string room_map_key = room_map_key_for(slot);
-        const json* room_map = state.contains(room_map_key) ? &state[room_map_key] : nullptr;
-        if (!room_map || cell_visible_in_room_map(h.value("x", 0), h.value("y", 0), *room_map)) {
+        if (!room_map_ptr || cell_visible_in_room_map(h.value("x", 0), h.value("y", 0), *room_map_ptr)) {
             out["human"] = {
                 {"x", h.value("x", 0)},
                 {"y", h.value("y", 0)},
@@ -261,9 +282,6 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
             };
         }
     }
-
-    const std::string room_map_key = room_map_key_for(slot);
-    const json* room_map_ptr = state.contains(room_map_key) ? &state[room_map_key] : nullptr;
 
     json nearby = json::array();
     json adjacent = json::array();
@@ -321,11 +339,10 @@ inline std::string compact_state_for_llm(const json& state, const std::string& s
     out["nearby_loot"] = loot;
     out["loot_auto_pickup_on_move"] = true;
 
-    const std::string room_map_key = room_map_key_for(slot);
-    if (state.contains(room_map_key)) {
-        out["current_room_map"] = state[room_map_key];
-        if (state[room_map_key].contains("enemies")) {
-            out["enemies_on_map"] = state[room_map_key]["enemies"];
+    if (room_map_ptr) {
+        out["current_room_map"] = *room_map_ptr;
+        if (room_map_ptr->contains("enemies")) {
+            out["enemies_on_map"] = (*room_map_ptr)["enemies"];
         }
     }
 
@@ -346,26 +363,6 @@ inline bool has_potion(const json& state, const std::string& slot = "rival") {
         if (item.value("id", "") == "potion" && item.value("count", 0) > 0) return true;
     }
     return false;
-}
-
-inline std::string room_map_key_for(const std::string& slot) {
-    return slot == "player" ? "player_room_map" : "rival_room_map";
-}
-
-inline bool cell_visible_in_room_map(int x, int y, const json& room_map) {
-    if (!room_map.is_object() || !room_map.contains("visible_cell_keys")) return false;
-    const std::string key = std::to_string(x) + "," + std::to_string(y);
-    for (const auto& entry : room_map["visible_cell_keys"]) {
-        if (entry.is_string() && entry.get<std::string>() == key) return true;
-    }
-    return false;
-}
-
-inline bool has_visible_local_map(const json& state, const std::string& slot) {
-    const std::string key = room_map_key_for(slot);
-    if (!state.contains(key) || !state[key].is_object()) return false;
-    const auto& room_map = state[key];
-    return room_map.contains("rows") && room_map["rows"].is_array() && !room_map["rows"].empty();
 }
 
 inline std::string format_room_map_for_prompt(const json& room_map) {

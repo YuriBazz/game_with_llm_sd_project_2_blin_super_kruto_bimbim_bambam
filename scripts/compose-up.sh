@@ -39,7 +39,7 @@ LOG_FILE=""
 NO_CACHE=false
 NO_BUILD=false
 compose_args=()
-cursor_profiles=()
+compose_profiles=()
 
 for arg in "$@"; do
   case "$arg" in
@@ -75,11 +75,7 @@ trim_env() {
   printf '%s' "${1:-}" | tr -d '[:space:]'
 }
 
-cursor_key() {
-  trim_env "${CURSOR_API_KEY:-}"
-}
-
-cursor_provider_for_label() {
+robot_llm_provider_for_label() {
   case "$1" in
     H) printf '%s' "${ROBOT_H_LLM_PROVIDER:-${ROBOT_H_LLM_PROVIDER_FALLBACK:-ollama}}" ;;
     A) printf '%s' "${ROBOT_A_LLM_PROVIDER:-${ROBOT_A_LLM_PROVIDER_FALLBACK:-ollama}}" ;;
@@ -87,13 +83,37 @@ cursor_provider_for_label() {
   esac
 }
 
+maybe_enable_ollama() {
+  local provider_a provider_h
+  provider_a="$(robot_llm_provider_for_label A)"
+  provider_h="$(robot_llm_provider_for_label H)"
+
+  if [[ "$provider_a" == "ollama" || "$provider_h" == "ollama" ]]; then
+    compose_profiles+=("ollama")
+    echo "  ollama: enabled"
+    if [[ "$provider_a" == "ollama" ]]; then
+      echo "    robot A: pull ${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-(unset)}}"
+    else
+      echo "    robot A: skip (provider=${provider_a})"
+    fi
+    if [[ "$provider_h" == "ollama" ]]; then
+      echo "    robot H: pull ${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-(unset)}}"
+    else
+      echo "    robot H: skip (provider=${provider_h})"
+    fi
+    return 0
+  fi
+
+  echo "  ollama: skipped (no robot uses ollama)"
+}
+
 maybe_enable_cursor_bridge() {
   local label="$1"
   local profile="$2"
   local provider
   local key
-  provider="$(cursor_provider_for_label "$label")"
-  key="$(cursor_key)"
+  provider="$(robot_llm_provider_for_label "$label")"
+  key="$(trim_env "${CURSOR_API_KEY:-}")"
 
   if [[ "$provider" != "cursor" ]]; then
     echo "  cursor-llm-bridge-${label,,}: skipped (ROBOT_${label}_LLM_PROVIDER=${provider})"
@@ -105,10 +125,11 @@ maybe_enable_cursor_bridge() {
     exit 1
   fi
 
-  cursor_profiles+=("$profile")
-  echo "  cursor-llm-bridge-${label,,}: enabled (ROBOT_${label}_LLM_PROVIDER=cursor)"
+  compose_profiles+=("$profile")
+  echo "  cursor-llm-bridge-${label,,}: enabled"
 }
 
+maybe_enable_ollama
 maybe_enable_cursor_bridge H cursor-h
 maybe_enable_cursor_bridge A cursor-a
 
@@ -116,17 +137,17 @@ if [[ "${GODMODE}" == "true" || "${GODMODE}" == "1" || "${GODMODE}" == "yes" ]];
   echo "GODMODE enabled — spectator fly camera; robots H+A controlled by agents"
 fi
 
-append_cursor_profiles() {
+append_compose_profiles() {
   local -n cmd_ref=$1
   local profile
-  for profile in "${cursor_profiles[@]}"; do
+  for profile in "${compose_profiles[@]}"; do
     cmd_ref+=(--profile "$profile")
   done
 }
 
 run_up() {
   local -a cmd=(docker compose)
-  append_cursor_profiles cmd
+  append_compose_profiles cmd
   cmd+=(up)
   if ((${#compose_args[@]} > 0)); then
     cmd+=("${compose_args[@]}")
@@ -157,7 +178,7 @@ fi
 echo "=== Building all project images ==="
 echo "  game-service, mcp-server, agent-runner, web-client"
 build_cmd=(docker compose)
-append_cursor_profiles build_cmd
+append_compose_profiles build_cmd
 build_cmd+=(build)
 if [[ "$NO_CACHE" == true ]]; then
   echo "  (--no-cache: full rebuild)"
@@ -166,9 +187,9 @@ fi
 "${build_cmd[@]}"
 
 echo "=== Starting full stack ==="
-echo "  game-service :8080, web-client :5173, ollama :11434, agent-runner-player, agent-runner-rival"
-echo "  Robot A: ${ROBOT_A_LLM_PROVIDER:-${ROBOT_A_LLM_PROVIDER_FALLBACK:-ollama}} model=${ROBOT_A_OLLAMA_MODEL:-${ROBOT_A_OLLAMA_MODEL_FALLBACK:-qwen2.5:3b}}"
-echo "  Robot H: ${ROBOT_H_LLM_PROVIDER:-${ROBOT_H_LLM_PROVIDER_FALLBACK:-ollama}} model=${ROBOT_H_OLLAMA_MODEL:-${ROBOT_H_OLLAMA_MODEL_FALLBACK:-llama3.2:1b}}"
+echo "  game-service :8080, web-client :5173, agent-runner-player, agent-runner-rival"
+echo "  Robot A: $(robot_llm_provider_for_label A) model=${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-}}"
+echo "  Robot H: $(robot_llm_provider_for_label H) model=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}}"
 if [[ -e /dev/dri/renderD128 ]]; then
   echo "  GPU: AMD (/dev/dri) — Ollama uses Vulkan"
 elif command -v nvidia-smi >/dev/null 2>&1; then

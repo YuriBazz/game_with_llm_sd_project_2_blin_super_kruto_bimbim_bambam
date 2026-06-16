@@ -90,24 +90,15 @@ int main() {
     }
 
     const std::string provider_key = agent::robot_env_key(agent_slot, "LLM_PROVIDER");
-    const std::string model_key = agent::robot_env_key(agent_slot, "OLLAMA_MODEL");
-    const std::string cursor_model_key = agent::robot_env_key(agent_slot, "CURSOR_MODEL");
+    const std::string model_key = agent::robot_env_key(agent_slot, "MODEL");
     const char* provider_env = agent::robot_env_or_fallback(agent_slot, "LLM_PROVIDER");
-    const char* model_env = agent::robot_env_or_fallback(agent_slot, "OLLAMA_MODEL");
-    const char* cursor_model_env = agent::robot_env_or_fallback(agent_slot, "CURSOR_MODEL");
+    const char* model_env = agent::robot_env_or_fallback(agent_slot, "MODEL");
     const std::string provider_name = provider_env ? provider_env : "mock";
     std::cout << "Agent runner starting (MCP mode, slot=" << agent_slot
               << ", label=" << agent_label << ")..." << std::endl;
-    if (provider_name == "cursor") {
-        std::cout << "LLM env " << provider_key << "=" << provider_name
-                  << " " << cursor_model_key << "="
-                  << (cursor_model_env ? cursor_model_env : "composer-2.5")
-                  << std::endl;
-    } else {
-        std::cout << "LLM env " << provider_key << "=" << provider_name
-                  << " " << model_key << "=" << (model_env ? model_env : "(default)")
-                  << std::endl;
-    }
+    std::cout << "LLM env " << provider_key << "=" << provider_name
+              << " " << model_key << "=" << (model_env ? model_env : "(unset)")
+              << std::endl;
     std::cout << "Max steps per round: " << max_steps << std::endl;
 
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {

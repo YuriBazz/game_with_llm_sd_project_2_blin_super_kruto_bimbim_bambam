@@ -29,11 +29,9 @@ class LLMClient {
 private:
     std::string provider_;
     std::string ollama_url_;
-    std::string ollama_model_;
+    std::string llm_model_;
     std::string openai_api_key_;
-    std::string openai_model_;
     std::string cursor_bridge_url_;
-    std::string cursor_model_;
     int max_retries_ = 3;
     int total_tokens_used_ = 0;
     int steps_counter_ = 0;
@@ -128,7 +126,7 @@ private:
         return response;
     }
 
-    static bool ollama_model_matches(const std::string& listed, const std::string& wanted) {
+    static bool llm_model_matches(const std::string& listed, const std::string& wanted) {
         if (listed == wanted) return true;
         if (listed.rfind(wanted + ":", 0) == 0) return true;
         const auto colon = listed.find(':');
@@ -145,7 +143,7 @@ private:
         try {
             const json tags = json::parse(*response);
             for (const auto& model : tags.value("models", json::array())) {
-                if (ollama_model_matches(model.value("name", ""), ollama_model_)) {
+                if (llm_model_matches(model.value("name", ""), llm_model_)) {
                     return true;
                 }
             }
@@ -154,8 +152,8 @@ private:
     }
 
     void request_ollama_pull() const {
-        std::cout << "Requesting Ollama pull for model: " << ollama_model_ << std::endl;
-        const json body = {{"name", ollama_model_}, {"stream", false}};
+        std::cout << "Requesting Ollama pull for model: " << llm_model_ << std::endl;
+        const json body = {{"name", llm_model_}, {"stream", false}};
         const auto response = http_post_json(
             ollama_url_ + "/api/pull",
             body,
@@ -163,7 +161,7 @@ private:
             600L
         );
         if (!response) {
-            std::cerr << "Ollama pull request failed for model " << ollama_model_ << std::endl;
+            std::cerr << "Ollama pull request failed for model " << llm_model_ << std::endl;
         }
     }
 
@@ -184,7 +182,7 @@ private:
     std::optional<std::string> ollama_chat(const json& messages, bool allow_cpu_fallback = true) {
         for (int pass = 0; pass < 2; ++pass) {
             const json body = {
-                {"model", ollama_model_},
+                {"model", llm_model_},
                 {"stream", false},
                 {"keep_alive", "24h"},
                 {"messages", messages},
@@ -200,7 +198,7 @@ private:
             if (!response) {
                 if (pass == 0 && allow_cpu_fallback && !ollama_force_cpu_ && ollama_num_gpu_ != 0) {
                     std::cerr << "Ollama GPU inference failed — retrying on CPU (num_gpu=0). "
-                              << "For AMD iGPU use OLLAMA_MODEL=qwen2.5:3b or OLLAMA_NUM_GPU=0."
+                              << "For AMD iGPU use ROBOT_*_MODEL=qwen2.5:3b or OLLAMA_NUM_GPU=0."
                               << std::endl;
                     ollama_force_cpu_ = true;
                     ollama_prompt_primed_ = false;
@@ -327,7 +325,7 @@ private:
         if (openai_api_key_.empty()) return std::nullopt;
 
         json body = {
-            {"model", openai_model_},
+            {"model", llm_model_},
             {"messages", json::array({
                 json{{"role", "system"}, {"content", system_prompt()}},
                 json{{"role", "user"}, {"content", prompt}}
@@ -358,7 +356,7 @@ private:
         if (cursor_bridge_url_.empty()) return std::nullopt;
 
         json body = {
-            {"model", cursor_model_},
+            {"model", llm_model_},
             {"messages", json::array({
                 json{{"role", "system"}, {"content", system_prompt()}},
                 json{{"role", "user"}, {"content", prompt}}
@@ -1118,21 +1116,17 @@ private:
 public:
     LLMClient(const std::string& provider,
               const std::string& ollama_url,
-              const std::string& ollama_model,
+              const std::string& llm_model,
               const std::string& openai_api_key,
-              const std::string& openai_model,
               const std::string& cursor_bridge_url,
-              const std::string& cursor_model,
               double temperature,
               int max_predict_tokens,
               int ollama_num_gpu)
         : provider_(provider),
           ollama_url_(ollama_url),
-          ollama_model_(ollama_model),
+          llm_model_(llm_model),
           openai_api_key_(openai_api_key),
-          openai_model_(openai_model),
           cursor_bridge_url_(cursor_bridge_url),
-          cursor_model_(cursor_model),
           temperature_(temperature),
           max_predict_tokens_(max_predict_tokens),
           ollama_num_gpu_(ollama_num_gpu),
@@ -1143,7 +1137,7 @@ public:
     void ping_ollama_keep_alive() {
         if (provider_ != "ollama") return;
         const json body = {
-            {"model", ollama_model_},
+            {"model", llm_model_},
             {"keep_alive", "24h"},
             {"stream", false},
             {"messages", json::array({
@@ -1194,7 +1188,7 @@ public:
         }
         if (provider_ != "ollama") return;
 
-        std::cout << "Waiting for Ollama model " << ollama_model_ << "..." << std::endl;
+        std::cout << "Waiting for Ollama model " << llm_model_ << "..." << std::endl;
         bool pull_requested = false;
 
         for (int attempt = 0; attempt < 300; ++attempt) {
@@ -1212,14 +1206,14 @@ public:
                 request_ollama_pull();
                 pull_requested = true;
             } else if (attempt % 15 == 0) {
-                std::cout << "Still waiting for Ollama model " << ollama_model_
+                std::cout << "Still waiting for Ollama model " << llm_model_
                           << " (attempt " << attempt << ")..." << std::endl;
             }
 
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
 
-        std::cerr << "Ollama model " << ollama_model_
+        std::cerr << "Ollama model " << llm_model_
                   << " not ready after wait — will retry per step (no permanent mock fallback)."
                   << std::endl;
     }
@@ -1585,10 +1579,7 @@ public:
         const std::string provider_name = provider ? provider : "mock";
 
         const char* ollama_url = std::getenv("OLLAMA_URL");
-        const char* ollama_model = agent::robot_env_or_fallback(slot, "OLLAMA_MODEL");
-        const char* openai_key = std::getenv("OPENAI_API_KEY");
-        const char* openai_model = agent::robot_env_or_fallback(slot, "OPENAI_MODEL");
-        const char* cursor_model = agent::robot_env_or_fallback(slot, "CURSOR_MODEL");
+        const char* model = agent::robot_env_or_fallback(slot, "MODEL");
         const char* cursor_bridge = agent::robot_env_or_fallback(slot, "CURSOR_BRIDGE_URL");
         const std::string& label = agent::robot_meta(slot).label;
         const std::string default_bridge = (label == "H")
@@ -1596,8 +1587,9 @@ public:
             : "http://cursor-llm-bridge-a:8765";
         const std::string cursor_bridge_url =
             provider_name == "cursor" ? (cursor_bridge ? cursor_bridge : default_bridge) : "";
-        const std::string cursor_model_name =
-            cursor_model ? cursor_model : "composer-2.5";
+        const std::string llm_model = model ? model : "";
+
+        const char* openai_key = std::getenv("OPENAI_API_KEY");
 
         const char* temperature = std::getenv("TEMPERATURE");
         const char* max_tokens = std::getenv("MAX_TOKENS");
@@ -1614,20 +1606,17 @@ public:
         auto client = std::make_unique<LLMClient>(
             provider_name,
             ollama_url ? ollama_url : "http://ollama:11434",
-            ollama_model ? ollama_model : "qwen2.5:7b",
+            llm_model,
             openai_key ? openai_key : "",
-            openai_model ? openai_model : "gpt-4o-mini",
             cursor_bridge_url,
-            cursor_model_name,
             temp,
             predict,
             num_gpu
         );
 
-        const char* slot = std::getenv("AGENT_SLOT");
         const char* max_total = std::getenv("MAX_TOTAL_TOKENS");
         client->set_agent_config(
-            slot ? slot : "rival",
+            slot,
             max_total ? std::stoi(max_total) : 50000);
         return client;
     }

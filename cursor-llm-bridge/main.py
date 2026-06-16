@@ -43,7 +43,7 @@ CURSOR_API_KEY = _require_cursor_api_key()
 app = FastAPI(title="cursor-llm-bridge", version="1.0.0")
 
 ROBOT_CURSOR_CWD = _robot_env(ROBOT_LABEL, "CURSOR_CWD", "/workspace")
-DEFAULT_MODEL = _robot_env(ROBOT_LABEL, "CURSOR_MODEL", "composer-2.5")
+DEFAULT_MODEL = _robot_env(ROBOT_LABEL, "MODEL", "")
 MAX_TOKENS = int(_robot_env(ROBOT_LABEL, "MAX_TOKENS", "5000"))
 MAX_TOTAL_TOKENS = int(_robot_env(ROBOT_LABEL, "MAX_TOTAL_TOKENS", "50000"))
 HEALTH_PROBE_INTERVAL_SEC = int(_robot_env(ROBOT_LABEL, "HEALTH_PROBE_INTERVAL_SEC", "0"))

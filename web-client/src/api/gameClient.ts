@@ -104,11 +104,19 @@ export class GameClient {
     });
   }
 
-  async getVisibleCells(radius: number = 5): Promise<VisibleCell[]> {
+  async getVisibleCells(radius: number = 5, slot: string = 'player'): Promise<VisibleCell[]> {
     const response = await this.fetch<VisibleCellsResponse>(
-      `/api/visible_cells?radius=${Math.max(1, Math.min(10, radius))}`
+      `/api/visible_cells?radius=${Math.max(1, Math.min(10, radius))}&slot=${encodeURIComponent(slot)}`
     );
     return response.cells ?? [];
+  }
+
+  async spectatorMove(direction: 'up' | 'down' | 'left' | 'right'): Promise<MoveResponse> {
+    return this.fetch<MoveResponse>('/api/spectator/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ direction }),
+    });
   }
 
   async getAvailableActions(): Promise<string[]> {

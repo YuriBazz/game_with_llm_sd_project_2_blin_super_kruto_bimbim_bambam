@@ -17,6 +17,7 @@
 #include <thread>
 #include <chrono>
 #include <deque>
+#include <regex>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -38,6 +39,8 @@ private:
     int visible_cells_turns_ = 0;
     double temperature_ = 0.3;
     int max_predict_tokens_ = 80;
+    std::string agent_slot_ = "rival";
+    int max_total_tokens_ = 50000;
     json ollama_prefix_messages_ = json::array();
     bool ollama_prompt_primed_ = false;
     bool ollama_practice_done_ = false;
@@ -218,13 +221,33 @@ private:
         return std::nullopt;
     }
 
+    const char* system_prompt() const {
+        return agent::system_prompt_for(agent_slot_);
+    }
+
+    json remap_for_agent_logic(const json& state) const {
+        if (agent_slot_ != "player") return state;
+        json view = state;
+        if (state.contains("player")) view["rival"] = state["player"];
+        if (state.contains("rival")) view["player"] = state["rival"];
+        view["rival_kills"] = state.value("player_kills", 0);
+        view["player_kills"] = state.value("rival_kills", 0);
+        if (state.contains("player_room_index")) {
+            view["rival_room_index"] = state["player_room_index"];
+        }
+        if (state.contains("rival_room_index")) {
+            view["player_room_index"] = state["rival_room_index"];
+        }
+        return view;
+    }
+
     void prime_ollama_system_prompt() {
         if (ollama_prompt_primed_) return;
         if (ollama_prime_attempted_ && !ollama_force_cpu_) return;
 
         ollama_prime_attempted_ = true;
         ollama_prefix_messages_ = json::array({
-            json{{"role", "system"}, {"content", agent::kSystemPrompt}}
+            json{{"role", "system"}, {"content", system_prompt()}}
         });
 
         json prime_messages = ollama_prefix_messages_;
@@ -252,13 +275,15 @@ private:
         }
         if (!ollama_prompt_primed_) return;
 
-        const std::string state_json = agent::compact_state_for_llm(agent::practice_state());
+        const json practice = agent::practice_state();
+        const std::string state_json = agent::compact_state_for_llm(practice, agent_slot_);
         const std::string prompt = agent::build_user_prompt(
             state_json,
             agent::practice_actions(),
-            agent::practice_state(),
+            practice,
             json::object(),
-            "Practice turn — warm up inference before the real game starts.");
+            "",
+            agent_slot_);
 
         std::cout << "Running practice inference (full game prompt shape)..." << std::endl;
         const auto response = call_ollama(prompt);
@@ -276,7 +301,7 @@ private:
         }
 
         json messages = json::array({
-            json{{"role", "system"}, {"content", agent::kSystemPrompt}},
+            json{{"role", "system"}, {"content", system_prompt()}},
             json{{"role", "user"}, {"content", prompt}}
         });
 
@@ -289,7 +314,7 @@ private:
         json body = {
             {"model", openai_model_},
             {"messages", json::array({
-                json{{"role", "system"}, {"content", agent::kSystemPrompt}},
+                json{{"role", "system"}, {"content", system_prompt()}},
                 json{{"role", "user"}, {"content", prompt}}
             })}
         };
@@ -677,6 +702,54 @@ private:
         return pick_rotating_move(state, ax, ay);
     }
 
+    int nearest_enemy_distance(const json& state, int ax, int ay) const {
+        const auto [tx, ty] = nearest_enemy_target(state, ax, ay);
+        return std::abs(tx - ax) + std::abs(ty - ay);
+    }
+
+    bool has_enemies_in_state(const json& state) const {
+        return state.contains("enemies") && state["enemies"].is_array() &&
+               !state["enemies"].empty();
+    }
+
+    std::optional<json> decide_minimal_fallback(const json& view, const json& actions) {
+        if (!view.contains("rival")) return std::nullopt;
+
+        const json& pl = view["rival"];
+        const int ax = pl["x"].get<int>();
+        const int ay = pl["y"].get<int>();
+        const int ahp = pl["hp"].get<int>();
+        if (ahp <= 0) {
+            return json{{"tool", "get_game_state"}, {"arguments", json::object()}};
+        }
+
+        const int max_hp = std::max(1, pl["max_hp"].get<int>());
+        if (action_available(actions, "use_item") &&
+            ahp * 100 < max_hp * 40 &&
+            agent::has_potion(view, agent_slot_)) {
+            return json{{"tool", "use_item"}, {"arguments", {{"item_id", "potion"}}}};
+        }
+
+        if (action_available(actions, "move") && path_planner_.has_active_step()) {
+            if (auto dir = path_planner_.next_direction()) {
+                return make_move_decision(*dir);
+            }
+        }
+
+        if (action_available(actions, "scout_around") &&
+            !path_planner_.has_paths() &&
+            !has_enemies_in_state(view)) {
+            return json{{"tool", "scout_around"}, {"arguments", json::object()}};
+        }
+
+        if (action_available(actions, "move")) {
+            sync_blocked_dirs_for_position(ax, ay);
+            if (auto rotated = pick_rotating_move(view, ax, ay)) return *rotated;
+        }
+
+        return json{{"tool", "get_game_state"}, {"arguments", json::object()}};
+    }
+
     std::pair<int, int> nearest_enemy_target(const json& state, int ax, int ay) const {
         int tx = ax;
         int ty = ay;
@@ -747,79 +820,36 @@ private:
             return R"({"tool":"get_game_state","arguments":{}})";
         }
 
-        const auto& action_list = actions.value("actions", json::array());
-        bool has_attack = false;
-        bool has_move = false;
-        bool has_use = false;
-        for (const auto& action : action_list) {
-            const std::string name = action.get<std::string>();
-            if (name == "attack") has_attack = true;
-            if (name == "move") has_move = true;
-            if (name == "use_item") has_use = true;
-        }
+        const int max_hp = std::max(1, pl["max_hp"].get<int>());
 
-
-        const int max_hp = pl["max_hp"].get<int>();
-        const int adjacent_enemies = count_adjacent_enemies(state, ax, ay);
-
-        if (has_use && ahp > 0 && ahp * 100 < max_hp * 40) {
+        if (action_available(actions, "use_item") &&
+            ahp * 100 < max_hp * 40 &&
+            agent::has_potion(state, agent_slot_)) {
             return R"({"tool":"use_item","arguments":{"item_id":"potion"}})";
         }
 
-        if (has_attack) {
+        if (action_available(actions, "attack")) {
             if (auto attack = pick_attack_decision(state, ax, ay)) {
                 return attack->dump();
             }
         }
 
-        if (has_use && ahp < max_hp && adjacent_enemies == 0 && ahp * 100 < max_hp * 40) {
-            return R"({"tool":"use_item","arguments":{"item_id":"potion"}})";
+        if (action_available(actions, "move") && path_planner_.has_active_step()) {
+            if (auto dir = path_planner_.next_direction()) {
+                return make_move_decision(*dir).dump();
+            }
         }
 
-        if (has_move) {
+        if (action_available(actions, "scout_around") &&
+            !path_planner_.has_paths() &&
+            !has_enemies_in_state(state)) {
+            return R"({"tool":"scout_around","arguments":{}})";
+        }
+
+        if (action_available(actions, "move")) {
             sync_blocked_dirs_for_position(ax, ay);
-            sync_fetch_counter_for_position(ax, ay);
-
-            const auto [tx, ty] = nearest_enemy_target(state, ax, ay);
-            const int nearest_dist = std::abs(tx - ax) + std::abs(ty - ay);
-
-            if (!path_planner_.has_paths() && adjacent_enemies == 0 && nearest_dist > 15) {
-                return R"({"tool":"scout_around","arguments":{}})";
-            }
-
-            if (path_planner_.has_active_step()) {
-                if (auto dir = path_planner_.next_direction()) {
-                    return make_move_decision(*dir).dump();
-                }
-            }
-
-            if (has_map_cache()) {
-                if (auto nav = pick_navigation_move(state, ax, ay, tx, ty)) {
-                    return nav->dump();
-                }
-            }
-
-            if (adjacent_enemies > 0 && has_attack) {
-                if (auto attack = pick_attack_decision(state, ax, ay)) {
-                    return attack->dump();
-                }
-            }
-
-            if (!has_map_cache() && stuck_turns_ >= 1 && visible_cells_fetches_here_ == 0) {
-                return json{{"tool", "scout_around"}, {"arguments", json::object()}}.dump();
-            }
-
-            if (stuck_turns_ >= 1 || is_ping_pong()) {
-                if (auto rotated = pick_rotating_move(state, ax, ay)) return rotated->dump();
-            }
-
-            if (auto greedy = pick_greedy_move(state, ax, ay, tx, ty)) return greedy->dump();
-            if (auto rotated = pick_rotating_move(state, ax, ay)) return rotated->dump();
-        }
-
-        if (has_attack) {
-            if (auto attack = pick_attack_decision(state, ax, ay)) {
-                return attack->dump();
+            if (auto rotated = pick_rotating_move(state, ax, ay)) {
+                return rotated->dump();
             }
         }
 
@@ -850,6 +880,9 @@ private:
                     if (decision.contains("tool")) break;
                 }
             }
+            if (!decision.contains("tool") && decision.contains("state") && decision["state"].is_object()) {
+                return std::nullopt;
+            }
             if (!decision.contains("tool")) {
                 return std::nullopt;
             }
@@ -868,6 +901,83 @@ private:
         }
 
         return decision;
+    }
+
+    void repair_move_decision(json& decision, const json& view) const {
+        if (!decision.contains("tool") || decision["tool"] != "move") return;
+        if (!decision.contains("arguments") || !decision["arguments"].is_object()) {
+            decision["arguments"] = json::object();
+        }
+        json& args = decision["arguments"];
+        const std::string dir = args.value("direction", "");
+        if (!dir.empty() && dir_index(dir) >= 0) return;
+        if (!view.contains("rival")) return;
+
+        const int ax = view["rival"].value("x", 0);
+        const int ay = view["rival"].value("y", 0);
+        if (args.contains("target_x") && args.contains("target_y")) {
+            args["x"] = args["target_x"];
+            args["y"] = args["target_y"];
+        }
+        if (!args.contains("x") || !args.contains("y")) return;
+
+        const int tx = args["x"].get<int>();
+        const int ty = args["y"].get<int>();
+        const int dx = tx - ax;
+        const int dy = ty - ay;
+        if (dx == 1 && dy == 0) args["direction"] = "right";
+        else if (dx == -1 && dy == 0) args["direction"] = "left";
+        else if (dx == 0 && dy == 1) args["direction"] = "down";
+        else if (dx == 0 && dy == -1) args["direction"] = "up";
+    }
+
+    std::optional<json> salvage_tool_decision(const std::string& raw) const {
+        static const std::regex actions_re("\"actions\"\\s*:\\s*\\[([^\\]]*)\\]");
+        std::smatch actions_match;
+        if (std::regex_search(raw, actions_match, actions_re)) {
+            const std::string actions_blob = actions_match[1].str();
+            static const char* kPriority[] = {
+                "attack", "use_item", "move", "scout_around"
+            };
+            for (const char* preferred : kPriority) {
+                if (actions_blob.find(preferred) != std::string::npos) {
+                    return json{
+                        {"tool", preferred},
+                        {"arguments", json::object()}
+                    };
+                }
+            }
+        }
+
+        static const std::regex tool_re("\"tool\"\\s*:\\s*\"([a-z_]+)\"");
+        std::smatch tool_match;
+        if (!std::regex_search(raw, tool_match, tool_re)) return std::nullopt;
+
+        json decision = json{
+            {"tool", tool_match[1].str()},
+            {"arguments", json::object()}
+        };
+
+        static const std::regex dir_re("\"direction\"\\s*:\\s*\"(up|down|left|right)\"");
+        std::smatch dir_match;
+        if (std::regex_search(raw, dir_match, dir_re)) {
+            decision["arguments"]["direction"] = dir_match[1].str();
+            return decision;
+        }
+
+        static const std::regex coord_re(
+            "\"(?:x|target_x)\"\\s*:\\s*(-?\\d+).{0,40}\"(?:y|target_y)\"\\s*:\\s*(-?\\d+)");
+        std::smatch coord_match;
+        if (std::regex_search(raw, coord_match, coord_re)) {
+            decision["arguments"]["x"] = std::stoi(coord_match[1].str());
+            decision["arguments"]["y"] = std::stoi(coord_match[2].str());
+            return decision;
+        }
+
+        if (decision["tool"] == "scout_around" || decision["tool"] == "get_game_state") {
+            return decision;
+        }
+        return std::nullopt;
     }
 
     std::optional<json> parse_tool_decision(const std::string& raw) const {
@@ -898,11 +1008,11 @@ private:
 
         std::cerr << "Failed to parse LLM response (first 120 chars): "
                   << raw.substr(0, 120) << std::endl;
-        return std::nullopt;
+        return salvage_tool_decision(raw);
     }
 
     std::optional<json> decide_with_mock(const json& state, const json& actions) {
-        const auto raw = call_mock(state, actions);
+        const auto raw = call_mock(remap_for_agent_logic(state), actions);
         if (!raw) return std::nullopt;
         return parse_tool_decision(*raw);
     }
@@ -1155,149 +1265,53 @@ public:
     }
 
     json apply_stuck_guard(json decision, const json& state, const json& actions) {
+        (void)actions;
         if (!state.contains("rival")) return decision;
         if (!decision.contains("tool")) return decision;
 
-        const int ax = state["rival"]["x"].get<int>();
-        const int ay = state["rival"]["y"].get<int>();
-        const auto [tx, ty] = nearest_enemy_target(state, ax, ay);
-
-        if (action_available(actions, "attack")) {
-            const int hp = state["rival"]["hp"].get<int>();
-            const int max_hp = std::max(1, state["rival"]["max_hp"].get<int>());
-            const bool low_hp = hp > 0 && hp * 100 < max_hp * 40;
-            if (!(low_hp && path_planner_.has_active_step())) {
-                if (auto attack = pick_attack_decision(state, ax, ay)) return *attack;
-            }
-        }
-
-        std::string tool = decision["tool"].get<std::string>();
-
-        if (tool == "scout_around") {
-            if (has_map_cache() && path_planner_.has_paths() && visible_cells_fetches_here_ > 0) {
-                if (auto nav = pick_navigation_move(state, ax, ay, tx, ty)) return *nav;
-            }
-            if (visible_cells_fetches_here_ > 0 && path_planner_.has_paths()) {
-                if (auto rotated = pick_rotating_move(state, ax, ay)) return *rotated;
-                return make_move_decision(kDirs[move_try_index_++ % 4]);
-            }
-            return decision;
-        }
-
+        const std::string tool = decision["tool"].get<std::string>();
         if (tool != "move") return decision;
 
+        const int ax = state["rival"]["x"].get<int>();
+        const int ay = state["rival"]["y"].get<int>();
         const std::string dir = decision.value("arguments", json::object()).value("direction", "");
-        if (dir.empty() || dir_index(dir) < 0) {
-            if (auto nav = pick_navigation_move(state, ax, ay, tx, ty)) return *nav;
-            if (auto greedy = pick_greedy_move(state, ax, ay, tx, ty)) return *greedy;
-            return make_move_decision(kDirs[move_try_index_++ % 4]);
-        }
 
-        if (is_ping_pong()) {
-            if (auto nav = pick_navigation_move(state, ax, ay, tx, ty)) return *nav;
-            if (auto greedy = pick_greedy_move(state, ax, ay, tx, ty)) return *greedy;
+        if (dir.empty() || dir_index(dir) < 0) {
+            if (auto rotated = pick_rotating_move(state, ax, ay)) return *rotated;
+            return decision;
         }
 
         const int idx = dir_index(dir);
         if (idx >= 0) {
             const int nx = ax + kDxy[idx][0];
             const int ny = ay + kDxy[idx][1];
-            if (has_enemy_at(state, nx, ny)) {
-                if (auto attack = pick_attack_decision(state, ax, ay)) return *attack;
+            if (has_enemy_at(state, nx, ny) || is_direction_blocked(dir)) {
+                if (auto rotated = pick_rotating_move(state, ax, ay)) return *rotated;
             }
         }
 
-        if (count_adjacent_enemies(state, ax, ay) > 0) {
-            if (auto attack = pick_attack_decision(state, ax, ay)) return *attack;
-        }
-
-        if (has_map_cache() && (stuck_turns_ >= 1 || is_direction_blocked(dir) || is_ping_pong())) {
-            if (auto nav = pick_navigation_move(state, ax, ay, tx, ty)) return *nav;
-        }
-
-        if (repeat_same_move_ >= 2 || stuck_turns_ >= 1 || is_ping_pong() ||
-            (stuck_turns_ >= 1 && is_direction_blocked(dir))) {
-            if (!has_map_cache() && visible_cells_fetches_here_ == 0) {
-                return json{{"tool", "scout_around"}, {"arguments", json::object()}};
-            }
-            if (auto nav = pick_navigation_move(state, ax, ay, tx, ty)) return *nav;
-            for (int i = 0; i < 4; ++i) {
-                const std::string alt = kDirs[(move_try_index_ + i) % 4];
-                if (!is_direction_blocked(alt) && alt != dir) {
-                    return make_move_decision(alt);
-                }
-            }
+        if ((repeat_same_move_ >= 2 || stuck_turns_ >= 2 || is_ping_pong()) &&
+            is_direction_blocked(dir)) {
+            if (auto rotated = pick_rotating_move(state, ax, ay)) return *rotated;
         }
 
         return decision;
     }
 
-    json apply_combat_guard(json decision, const json& state, const json& actions) {
-        if (!state.contains("rival") || !decision.contains("tool")) return decision;
-        if (!action_available(actions, "attack")) return decision;
-        const std::string tool = decision["tool"].get<std::string>();
-        if (tool == "attack") return decision;
-
-        const int hp = state["rival"]["hp"].get<int>();
-        const int max_hp = std::max(1, state["rival"]["max_hp"].get<int>());
-        const bool low_hp = hp > 0 && hp * 100 < max_hp * 40;
-
-        if (low_hp && path_planner_.has_active_step()) {
-            return decision;
-        }
-
-        const int ax = state["rival"]["x"].get<int>();
-        const int ay = state["rival"]["y"].get<int>();
-        if (auto attack = pick_attack_decision(state, ax, ay)) {
-            std::cerr << "Combat guard: attack legal but LLM chose '" << tool
-                      << "' — forcing attack" << std::endl;
-            return *attack;
-        }
+    json apply_combat_guard(json decision, const json& /*state*/, const json& /*actions*/) {
         return decision;
     }
 
     json apply_path_guard(json decision, const json& state, const json& actions) {
         if (!state.contains("rival") || !decision.contains("tool")) return decision;
-        if (!action_available(actions, "move")) return decision;
-
-        const int hp = state["rival"]["hp"].get<int>();
-        const int max_hp = std::max(1, state["rival"]["max_hp"].get<int>());
-        const bool low_hp = hp > 0 && hp * 100 < max_hp * 40;
-
-        if (action_available(actions, "use_item") && low_hp && agent::has_potion(state)) {
-            return decision;
-        }
-
-        if (action_available(actions, "attack") && !low_hp) {
-            return decision;
-        }
-
         if (!path_planner_.has_active_step()) return decision;
 
         const auto next_dir = path_planner_.next_direction();
         if (!next_dir) return decision;
 
         const std::string tool = decision["tool"].get<std::string>();
-
-        if (action_available(actions, "attack") && low_hp) {
-            if (tool == "attack" || tool == "move") return decision;
-        }
-
-        if (tool == "scout_around" && path_planner_.has_paths()) {
-            return make_move_decision(*next_dir);
-        }
-
-        if (tool == "move") {
-            const std::string chosen =
-                decision.value("arguments", json::object()).value("direction", "");
-            if (chosen != *next_dir && !action_available(actions, "attack")) {
-                return make_move_decision(*next_dir);
-            }
-            return decision;
-        }
-
-        if (!action_available(actions, "attack") &&
-            (tool == "get_game_state" || tool == "get_available_actions")) {
+        if ((tool == "get_game_state" || tool == "get_available_actions") &&
+            action_available(actions, "move")) {
             return make_move_decision(*next_dir);
         }
 
@@ -1305,7 +1319,7 @@ public:
     }
 
     json apply_query_guard(json decision, const json& state, const json& actions) {
-        if (!state.contains("rival") || !decision.contains("tool")) return decision;
+        if (!decision.contains("tool")) return decision;
 
         std::string tool = decision["tool"].get<std::string>();
 
@@ -1315,41 +1329,14 @@ public:
             decision["arguments"] = json::object();
         }
 
-        if (!is_query_tool(tool)) {
+        if (is_query_tool(tool)) {
+            ++consecutive_query_turns_;
+        } else {
             consecutive_query_turns_ = 0;
-            return decision;
         }
 
-        ++consecutive_query_turns_;
-
-        if (tool == "scout_around" && (!has_map_cache() || !path_planner_.has_paths())) {
-            return decision;
-        }
-
-        const int ax = state["rival"]["x"].get<int>();
-        const int ay = state["rival"]["y"].get<int>();
-        const auto [tx, ty] = nearest_enemy_target(state, ax, ay);
-
-        auto action_available = [&](const std::string& name) {
-            for (const auto& action : actions.value("actions", json::array())) {
-                if (action.get<std::string>() == name) return true;
-            }
-            return false;
-        };
-
-        if (action_available("attack")) {
-            if (auto attack = pick_attack_decision(state, ax, ay)) return *attack;
-        }
-
-        const int hp = state["rival"]["hp"].get<int>();
-        const int max_hp = state["rival"]["max_hp"].get<int>();
-        if (action_available("use_item") && hp > 0 && hp * 100 < max_hp * 40) {
-            return json{{"tool", "use_item"}, {"arguments", {{"item_id", "potion"}}}};
-        }
-
-        if (action_available("move")) {
-            if (auto move = pick_greedy_move(state, ax, ay, tx, ty)) return *move;
-            if (auto rotated = pick_rotating_move(state, ax, ay)) return *rotated;
+        if (consecutive_query_turns_ >= 3 && is_query_tool(tool) && state.contains("rival")) {
+            if (auto fallback = decide_minimal_fallback(state, actions)) return *fallback;
         }
 
         return decision;
@@ -1374,14 +1361,25 @@ public:
     }
 
     std::optional<json> decide_action(const json& state, const json& actions) {
-        ensure_session(state);
-        sync_path_planner(state);
-        const json path_info = path_planner_.summary_for_prompt();
-        const std::string state_json = agent::compact_state_for_llm(state);
-        const std::string prompt = agent::build_user_prompt(
-            state_json, actions, state, path_info, action_feedback_);
+        if (total_tokens_used_ >= max_total_tokens_) {
+            std::cerr << "Token budget exceeded (" << total_tokens_used_
+                      << "/" << max_total_tokens_ << ") — using minimal fallback"
+                      << std::endl;
+            return decide_minimal_fallback(remap_for_agent_logic(state), actions);
+        }
 
-        for (int attempt = 0; attempt < max_retries_; ++attempt) {
+        const json view = remap_for_agent_logic(state);
+        ensure_session(state);
+        sync_path_planner(view);
+
+        const json path_info = path_planner_.summary_for_prompt();
+        const std::string state_json = agent::compact_state_for_llm(state, agent_slot_);
+
+        const int llm_attempts = (provider_ == "ollama") ? 2 : max_retries_;
+        for (int attempt = 0; attempt < llm_attempts; ++attempt) {
+            const std::string prompt = agent::build_user_prompt(
+                state_json, actions, state, path_info, action_feedback_, agent_slot_);
+
             std::optional<std::string> raw;
             const auto t0 = std::chrono::steady_clock::now();
 
@@ -1390,7 +1388,7 @@ public:
             } else if (provider_ == "openai") {
                 raw = call_openai(prompt);
             } else {
-                raw = call_mock(state, actions);
+                raw = call_mock(view, actions);
             }
 
             if (provider_ == "ollama" && raw) {
@@ -1405,43 +1403,24 @@ public:
 
             if (!raw) {
                 std::cerr << "LLM call failed, retry " << (attempt + 1) << std::endl;
+                action_feedback_ =
+                    "Previous LLM call failed — reply with valid JSON only: "
+                    "{\"tool\":\"...\",\"arguments\":{...}}";
                 std::this_thread::sleep_for(std::chrono::milliseconds(500 * (attempt + 1)));
                 continue;
             }
 
             try {
                 if (auto decision = parse_tool_decision(*raw)) {
+                    repair_move_decision(*decision, view);
                     const std::string tool = decision->value("tool", "");
                     if (!tool.empty() && !action_is_available(actions, tool)) {
-                        if (tool == "attack" && action_available(actions, "move") &&
-                            attempt + 1 < max_retries_) {
-                            action_feedback_ =
-                                "attack is NOT legal this turn — target must be on an adjacent "
-                                "cell (dist=1). attack is missing from Available actions. "
-                                "Choose move toward the nearest nearby_enemies entry instead.";
-                            std::cerr << "LLM chose unavailable attack — retrying with feedback"
-                                      << std::endl;
-                            continue;
-                        }
                         std::cerr << "LLM chose unavailable '" << tool
-                                  << "' — using mock fallback" << std::endl;
-                        return decide_with_mock(state, actions);
-                    }
-
-                    if (action_available(actions, "attack") && tool != "attack" &&
-                        attempt + 1 < max_retries_) {
-                        const int hp = state["rival"].value("hp", 0);
-                        const int max_hp = std::max(1, state["rival"].value("max_hp", 1));
-                        const bool low_hp = hp > 0 && hp * 100 < max_hp * 40;
-                        if (!(low_hp && path_planner_.has_active_step())) {
-                            action_feedback_ =
-                                "attack IS legal this turn (listed in Available actions). You are "
-                                "adjacent to a monster — use attack with target_x/target_y from "
-                                "adjacent_enemies. Do NOT move.";
-                            std::cerr << "LLM skipped legal attack — retrying with feedback"
-                                      << std::endl;
-                            continue;
-                        }
+                                  << "' — retry with feedback" << std::endl;
+                        action_feedback_ =
+                            "Tool '" + tool +
+                            "' is NOT in Available actions. Pick exactly one listed action.";
+                        continue;
                     }
 
                     if (tool == "move") {
@@ -1453,19 +1432,13 @@ public:
                                       << ", parsed=" << decision->dump()
                                       << ", raw=" << raw->substr(0, 120) << ")"
                                       << std::endl;
-                            if (attempt + 1 < max_retries_) {
-                                action_feedback_ =
-                                    "move requires direction: up, down, left, or right.";
-                                std::cerr << "  retrying (" << (attempt + 1) << "/"
-                                          << max_retries_ << ")" << std::endl;
-                                continue;
-                            }
-                            if (auto fallback = decide_with_mock(state, actions)) {
-                                return fallback;
-                            }
+                            action_feedback_ =
+                                "Invalid move — use direction up/down/left/right only.";
+                            continue;
                         }
                     }
 
+                    action_feedback_.clear();
                     return decision;
                 }
             } catch (const std::exception& e) {
@@ -1476,15 +1449,22 @@ public:
                           << raw->substr(0, 120) << std::endl;
             }
 
+            action_feedback_ =
+                "Could not parse your reply — respond with JSON only, no markdown: "
+                "{\"tool\":\"move\",\"arguments\":{\"direction\":\"up\"}}";
             std::this_thread::sleep_for(std::chrono::milliseconds(500 * (attempt + 1)));
         }
 
         if (provider_ != "mock") {
-            std::cerr << "LLM unavailable this turn — using mock once (provider stays "
+            std::cerr << "LLM decision unusable — using minimal fallback (provider stays "
                       << provider_ << ")" << std::endl;
-            return decide_with_mock(state, actions);
+            return decide_minimal_fallback(view, actions);
         }
         return std::nullopt;
+    }
+
+    json agent_view(const json& state) const {
+        return remap_for_agent_logic(state);
     }
 
     static std::unique_ptr<LLMClient> from_env() {
@@ -1499,14 +1479,15 @@ public:
         const char* max_tokens = std::getenv("MAX_TOKENS");
 
         const double temp = temperature ? std::stod(temperature) : 0.3;
-        const int predict = max_tokens ? std::min(std::stoi(max_tokens), 64) : 48;
+        const int env_max = max_tokens ? std::stoi(max_tokens) : 128;
+        const int predict = std::max(64, std::min(env_max, 256));
         const char* num_gpu_env = std::getenv("OLLAMA_NUM_GPU");
         int num_gpu = -1;
         if (num_gpu_env && *num_gpu_env) {
             num_gpu = std::stoi(num_gpu_env);
         }
 
-        return std::make_unique<LLMClient>(
+        auto client = std::make_unique<LLMClient>(
             provider_name,
             ollama_url ? ollama_url : "http://ollama:11434",
             ollama_model ? ollama_model : "qwen2.5:7b",
@@ -1516,5 +1497,19 @@ public:
             predict,
             num_gpu
         );
+
+        const char* slot = std::getenv("AGENT_SLOT");
+        const char* max_total = std::getenv("MAX_TOTAL_TOKENS");
+        client->set_agent_config(
+            slot ? slot : "rival",
+            max_total ? std::stoi(max_total) : 50000);
+        return client;
     }
+
+    void set_agent_config(const std::string& slot, int max_total_tokens) {
+        agent_slot_ = (slot == "player") ? "player" : "rival";
+        max_total_tokens_ = max_total_tokens;
+    }
+
+    const std::string& agent_slot() const { return agent_slot_; }
 };

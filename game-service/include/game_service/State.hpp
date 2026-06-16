@@ -14,6 +14,7 @@
 #include "entities/Item.hpp"
 #include "entities/Loot.hpp"
 #include "entities/Player.hpp"
+#include "entities/Spectator.hpp"
 #include "map/LevelMap.hpp"
 #include "map/MapOptions.hpp"
 
@@ -80,6 +81,7 @@ public:
     LevelMap map;
     Player player;
     Player rival;
+    Spectator spectator;
     bool session_active = false;
     int session_id = 0;
     bool god_mode = false;
@@ -126,6 +128,7 @@ public:
 
     // slot: "player" (default, human) or "rival" (agent)
     MoveResult move_slot(const std::string& slot, int dx, int dy);
+    MoveResult move_spectator(int dx, int dy);
     AttackResult attack_slot(const std::string& slot, int dx, int dy);
     UseItemResult use_item_slot(const std::string& slot, const std::string& item_id);
 
@@ -135,6 +138,7 @@ public:
 
     // Автоматический ход врагов после действия игрока
     void process_enemy_turns();
+    void process_rat_turn(int enemy_index);
     void process_realtime_tick();
     void try_respawn_players();
     void spawn_wave();
@@ -178,6 +182,7 @@ private:
 
     [[nodiscard]] bool is_enemy_active(const Enemy& enemy) const;
     [[nodiscard]] std::pair<int, int> bfs_next_step(int from_x, int from_y, int to_x, int to_y) const;
+    [[nodiscard]] std::vector<std::pair<int, int>> reachable_cells_from(int from_x, int from_y) const;
 
     [[nodiscard]] Player* actor_for_slot(const std::string& slot);
     [[nodiscard]] const Player* actor_for_slot(const std::string& slot) const;

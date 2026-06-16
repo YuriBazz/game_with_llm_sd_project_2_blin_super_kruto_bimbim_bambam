@@ -29,6 +29,8 @@ int main() {
             assert(enemy.hp == 10);
         } else if (enemy.type == EnemyType::Troll) {
             assert(enemy.hp == 18);
+        } else if (enemy.type == EnemyType::Rat) {
+            assert(enemy.hp == 3);
         }
     }
 

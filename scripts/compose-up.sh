@@ -11,7 +11,7 @@ Usage: ./scripts/compose-up.sh [options] [docker compose up args...]
 One command to build and run the full stack.
 
 Options:
-  --godmode       Human spectator (noclip, enemies ignore you, full map)
+  --godmode       Enable spectator camera (default in compose: GODMODE=true)
   --log=PATH      Write compose output to PATH (truncates existing file)
   --no-build      Skip image build (docker compose up only)
   --no-cache      Rebuild all images from scratch (docker compose build --no-cache)
@@ -34,7 +34,7 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-export GODMODE="${GODMODE:-false}"
+export GODMODE="${GODMODE:-true}"
 LOG_FILE=""
 NO_CACHE=false
 NO_BUILD=false
@@ -71,7 +71,7 @@ for arg in "$@"; do
 done
 
 if [[ "${GODMODE}" == "true" || "${GODMODE}" == "1" || "${GODMODE}" == "yes" ]]; then
-  echo "GODMODE enabled — human noclip spectator, enemies ignore you"
+  echo "GODMODE enabled — spectator fly camera; robots H+A controlled by agents"
 fi
 
 run_up() {
@@ -112,8 +112,9 @@ fi
 "${build_cmd[@]}"
 
 echo "=== Starting full stack ==="
-echo "  game-service :8080, web-client :5173, ollama :11434, agent-runner, mcp-server"
-echo "  LLM_PROVIDER=${LLM_PROVIDER:-mock}  OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}"
+echo "  game-service :8080, web-client :5173, ollama :11434, agent-runner-player, agent-runner-rival"
+echo "  Robot A: LLM_PROVIDER=${LLM_PROVIDER:-ollama} OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}"
+echo "  Robot H: LLM_PROVIDER=${LLM_PROVIDER_PLAYER:-ollama} OLLAMA_MODEL=${OLLAMA_MODEL_PLAYER:-llama3.2:1b}"
 if [[ -e /dev/dri/renderD128 ]]; then
   echo "  GPU: AMD (/dev/dri) — Ollama uses Vulkan"
 elif command -v nvidia-smi >/dev/null 2>&1; then

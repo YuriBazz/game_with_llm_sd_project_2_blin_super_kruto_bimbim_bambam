@@ -11,13 +11,15 @@
 enum class EnemyType {
     Goblin,
     Orc,
-    Troll
+    Troll,
+    Rat
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(EnemyType, {
     {EnemyType::Goblin, "goblin"},
     {EnemyType::Orc, "orc"},
     {EnemyType::Troll, "troll"},
+    {EnemyType::Rat, "rat"},
 })
 
 struct Enemy {
@@ -25,8 +27,10 @@ struct Enemy {
     int x, y;
     int hp;
     EnemyType type;
+    int target_x = -1;
+    int target_y = -1;
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Enemy, id, x, y, hp, type)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Enemy, id, x, y, hp, type, target_x, target_y)
 
 #endif //GAME_SERVICE_ENEMY_HPP

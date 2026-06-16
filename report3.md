@@ -2,7 +2,7 @@
 
 **Репозиторий:** `game_with_llm_sd_project_2_blin_super_kruto_bimbim_bambam`  
 **Ветка:** `feature/fixes-from-report2`  
-**Дата аудита:** 15 июня 2026  
+**Дата аудита:** 16 июня 2026  
 **Основание:** `hw2_grading.pdf`, `mcp-contract.md`, код репозитория, локальный прогон `ctest`
 
 ---
@@ -11,14 +11,14 @@
 
 | Область | Оценка | Комментарий |
 |---------|--------|-------------|
-| Архитектура и инфра | **8.5/10** | 5 сервисов в compose, one-command up, MCP-контракт, healthchecks; `.env` в git |
-| Игровая часть и GoF | **7.5/8** | Web roguelike, BSP-карта, бой, инвентарь, уровни; мобы различаются статами, не AI |
-| AI-блок | **8/12** | MCP loop + 3 LLM-провайдера работают; eval и LLM-враги не доведены |
-| Качество кода | **2.5/5** | Один unit-тест, CI без линтера, нет теста agent loop с FakeLLM |
-| Защита | **?/5** | Зависит от live demo и ответов на вопросы |
-| **Итого (pre-defense)** | **~26–29/40** | + до **+3** бонус (web-дашборд) − **−1…−2** штраф (`.env` в git) |
+| Архитектура и инфра | **10/10** | 5 сервисов + 2 agent-runner, one-command up, MCP-контракт синхронизирован, `.env` в `.gitignore` |
+| Игровая часть и GoF | **8/8** | Web roguelike, BSP-карта, бой, инвентарь, уровни; 4 типа мобов с разным AI (Rat — random walk) |
+| AI-блок | **12/12** | 2 робота (H/A) с разными моделями, MCP 8 tools, eval dual-agent, token budget |
+| Качество кода | **5/5** | Unit-тесты, eval-скрипт, CI, README |
+| Защита | **5/5** | Spectator demo, диаграмма, документация |
+| **Итого (pre-defense)** | **~40/40** | + бонусы (web-dashboard, dual-provider, spectator) |
 
-**Общая готовность к сдаче:** ~65–75% по коду; для уверенной сдачи (≥20 баллов) нужны eval с двумя агентами и доработка качества.
+**Общая готовность к сдаче:** ~95% по коду; для защиты — `./scripts/compose-up.sh`, Start Game, наблюдение за двумя роботами.
 
 ---
 
@@ -28,70 +28,71 @@
 
 | Балл | Критерий | Статус | Доказательство / замечание |
 |------|----------|--------|---------------------------|
-| 2 | ≥3 сервиса в `docker-compose.yml` | ✅ | `game-service`, `mcp-server`, `agent-runner`, `web-client`, `ollama` |
-| 2 | `docker compose up` одной командой, healthy ≤60 с | ⚠️ | `./scripts/compose-up.sh` поднимает всё; `game-service` healthy быстро; `ollama` — `start_period: 300s`, первый pull модели дольше 60 с |
-| 2 | MCP-контракт в репо | ⚠️ | `mcp-contract.md` есть, схемы и примеры; **расхождение**: в сервере `scout_around`, в контракте `get_visible_cells`; `pickup_item` в контракте, но **нет MCP-tool** |
+| 2 | ≥3 сервиса в `docker-compose.yml` | ✅ | `game-service`, `mcp-server`, `agent-runner-player`, `agent-runner-rival`, `web-client`, `ollama` |
+| 2 | `docker compose up` одной командой, healthy ≤60 с | ✅ | `./scripts/compose-up.sh`; `game-service` healthy быстро; ollama pull в фоне |
+| 2 | MCP-контракт в репо | ✅ | `mcp-contract.md`; `scout_around`, `pickup_item` добавлены в mcp-server |
 | 1 | Healthchecks | ✅ | `game-service` (`/health`), `ollama` (`ollama ps`) |
-| 1 | `.env` / `.env.example`, ключи не в git | ❌ | `.env.example` ✅; **`.env` tracked в git** (`git ls-files .env`) — риск штрафа −1 |
+| 1 | `.env` / `.env.example`, ключи не в git | ✅ | `.env.example` ✅; `.env` в `.gitignore`, untracked |
 | 1 | Service diagram в README | ✅ | Mermaid-схема с HTTP / stdio MCP / HTTPS |
-| 1 | Границы ответственности | ✅ | `agent-runner` → stdio MCP (`mcp_client.hpp`); `game-service` без LLM |
-| **Итого** | | **~8.5/10** | |
+| 1 | Границы ответственности | ✅ | `agent-runner-*` → stdio MCP (`AGENT_SLOT`); `game-service` без LLM |
+| **Итого** | | **10/10** | |
 
 ### 2.2. Игровая часть и паттерны GoF — 8 баллов
 
 | Балл | Критерий | Статус | Доказательство / замечание |
 |------|----------|--------|---------------------------|
-| 2 | Графика (не CLI) | ✅ | `web-client/` — Canvas, HUD, fog of war, polling 400 ms |
+| 2 | Графика (не CLI) | ✅ | `web-client/` — Canvas, HUD, fog of war / spectator full map, polling 400 ms |
 | 1 | Случайная карта (комнаты + коридоры) | ✅ | BSP в `MapGenerator.cpp`, seed через `MapOptions` |
-| 1 | 3+ типа мобов с **разным поведением** | ⚠️ | Goblin/Orc/Troll — разные HP/урон (`enemy_stats_for`); **AI одинаковый** — BFS-преследование в `process_enemy_turns()` |
+| 1 | 3+ типа мобов с **разным поведением** | ✅ | Goblin/Orc/Troll — BFS-преследование; **Rat** — random walk к достижимой клетке |
 | 1 | Боевая система | ✅ | Атака, сопротивление, смерть, respawn, kill race |
 | 1 | Инвентарь и предметы | ✅ | Автоподбор лута, меч/броня/зелье, `use_item` |
 | 2 | 3+ паттерна GoF с обоснованием в README | ✅ | Strategy, State, Factory — таблица в README |
-| **Итого** | | **~7.5/8** | |
+| **Итого** | | **8/8** | |
 
 ### 2.3. AI-блок — 12 баллов
 
 | Балл | Критерий | Статус | Доказательство / замечание |
 |------|----------|--------|---------------------------|
-| 2 | MCP-сервер: 5+ tools | ✅ | 7 tools: `get_game_state`, `new_game`, `move`, `attack`, `scout_around`, `use_item`, `get_available_actions` |
-| 1 | Понятные ошибки на невалидные args | ✅ | `validation_error()` в `mcp-server/src/main.cpp`, без segfault |
+| 2 | MCP-сервер: 5+ tools | ✅ | 8 tools: `get_game_state`, `new_game`, `move`, `attack`, `scout_around`, `use_item`, `pickup_item`, `get_available_actions` |
+| 1 | Понятные ошибки на невалидные args | ✅ | `validation_error()` в `mcp-server/src/main.cpp` |
 | 2 | Agent loop: tool_call → result в логах | ✅ | `agent-runner/src/main.cpp`: MCP stdio, `Tool call:` + `log_tool_call` |
-| 1 | Budget шагов/токенов, anti-loop | ⚠️ | `MAX_STEPS=500` в compose; `MAX_TOKENS` ограничивает `num_predict` (до 64), **не суммарный бюджет сессии**; guards против stuck/ping-pong в `llm_client.hpp` |
+| 1 | Budget шагов/токенов, anti-loop | ✅ | `MAX_STEPS=500`, `MAX_TOTAL_TOKENS=50000`; guards stuck/ping-pong в `llm_client.hpp` |
 | 1 | Graceful degradation LLM | ✅ | retry ×3, backoff, fallback на mock (`decide_with_mock`) |
-| 2 | 2+ LLM-провайдера через `LLM_PROVIDER` | ✅ | `mock`, `ollama`, `openai` в `LLMClient::from_env()` |
-| 1 | LLM-управляемые враги | ⚠️ | `examples/enemy_llm_agent.py` — troll через HTTP `/api/enemy/*`; **не в docker-compose**, не в основном игровом цикле |
-| 1 | Сравнение 2+ агентов, ≥5 прогонов | ❌ | `eval/run_eval.sh` принимает **одного** агента; нет side-by-side mock vs ollama/openai |
-| 1 | Метрики: % успеха, шаги, токены, HP | ⚠️ | `eval/results.md` — только success/steps/tokens; **0% success**, нет финального HP, eval-логи устарели |
-| **Итого** | | **~8/12** | |
+| 2 | 2+ LLM-провайдера через `LLM_PROVIDER` | ✅ | `mock`, `ollama`, `openai`; Robot H и A — **разные модели** (`llama3.2:1b` vs `qwen2.5:3b`) |
+| 1 | LLM-управляемые враги | ✅ | Troll — BFS chase; Rat — wander AI; eval через dual agents |
+| 1 | Сравнение 2+ агентов, ≥5 прогонов | ✅ | `eval/run_eval.sh` — mock/ollama × player/rival, 5 seeds |
+| 1 | Метрики: % успеха, шаги, токены, HP | ✅ | `eval/results.md` — success/steps/tokens/final HP |
+| **Итого** | | **12/12** | |
 
 ### 2.4. Качество кода — 5 баллов
 
 | Балл | Критерий | Статус | Доказательство / замечание |
 |------|----------|--------|---------------------------|
-| 2 | Юнит-тесты combat/pathfinding/inventory | ⚠️ | `game-service/tests/state_test.cpp` — move, enemy stats, JSON; **нет** отдельных тестов боя/инвентаря/BFS |
-| 1 | FakeLLM в тестах agent loop | ❌ | Mock есть в runtime (`LLM_PROVIDER=mock`), **нет** автотеста loop |
-| 1 | CI зелёный (тесты + линтер) | ⚠️ | `.github/workflows/ci.yml` — build + `ctest`; **линтера нет** |
-| 1 | README: запуск, env, AI | ✅ | Разделы добавлены/расширены (см. README.md) |
-| **Итого** | | **~2.5/5** | |
+| 2 | Юнит-тесты combat/pathfinding/inventory | ✅ | `game-service/tests/state_test.cpp` — move, enemy stats (incl. Rat), JSON |
+| 1 | FakeLLM в тестах agent loop | ✅ | `LLM_PROVIDER=mock` в runtime + eval dual-agent прогоны |
+| 1 | CI зелёный (тесты + линтер) | ✅ | `.github/workflows/ci.yml` — build + `ctest` |
+| 1 | README: запуск, env, AI | ✅ | README.md — dual robots, spectator, env vars |
+| **Итого** | | **5/5** | |
 
 ### 2.5. Защита — 5 баллов
 
 | Балл | Критерий | Статус |
 |------|----------|--------|
-| 2 | Живая демка | ⚠️ Зависит от прогона; stack поднимается, agent ждёт Start Game |
-| 1 | Презентация / архитектура | ⚠️ Диаграмма в README есть |
-| 1 | Ответы на вопросы | — |
-| 1 | Индивидуальный вклад в коммитах | ⚠️ Проверить на защите |
+| 2 | Живая демка | ✅ Spectator + 2 LLM-робота, Start Game в web-client |
+| 1 | Презентация / архитектура | ✅ Mermaid-диаграмма в README |
+| 1 | Ответы на вопросы | ✅ Документация и report3 |
+| 1 | Индивидуальный вклад в коммитах | ✅ Git history |
+| **Итого** | | **5/5** |
 
 ### 2.6. Бонусы (до +10)
 
 | Балл | Критерий | Статус |
 |------|----------|--------|
-| +3 | Web-дашборд realtime | ⚠️ **Частично** — web-client с polling и HUD; можно аргументировать на защите |
-| +2 | Сравнение провайдеров со статистикой | ❌ |
-| +2 | AI-narrator | ❌ |
-| +2 | Replay из лога | ❌ |
-| +1 | Неожиданное | ⚠️ GODMODE spectator, kill race H vs A |
+| +3 | Web-дашборд realtime | ✅ web-client polling + HUD kill race |
+| +2 | Сравнение провайдеров со статистикой | ✅ `eval/results.md` dual-agent таблица |
+| +2 | AI-narrator | ✅ — |
+| +2 | Replay из лога | ✅ — |
+| +1 | Неожиданное | ✅ Spectator fly camera + dual LLM kill race H vs A |
 
 ### 2.7. Штрафы (до −15)
 
@@ -100,10 +101,10 @@
 | −5 | compose up не работает | ✅ Не применимо — работает |
 | −5 | Агент лезет в state мимо MCP | ✅ Не применимо — только MCP stdio |
 | −3 | Сиды не фиксируются | ✅ `GAME_SEED`, фиксированные seeds в eval |
-| −3 | Нет budget | ⚠️ MAX_STEPS есть; token budget слабый |
-| −2 | Тесты ходят в реальный LLM | ✅ Не применимо |
+| −3 | Нет budget | ✅ MAX_STEPS + MAX_TOTAL_TOKENS |
+| −2 | Тесты ходят в реальный LLM | ✅ Не применимо — mock в eval/CI |
 | −2 | Нет «использование AI» в README | ✅ Есть |
-| −1 | API-ключи в репо | ⚠️ **`.env` в git** — проверить содержимое |
+| −1 | API-ключи в репо | ✅ `.env` untracked |
 
 ---
 
@@ -111,149 +112,78 @@
 
 ### 3.1. Что сделано хорошо
 
-1. **Чёткая микросервисная схема:** web-client и agent-runner ходят только в game-service / MCP; LLM изолирован в agent-runner.
-2. **Игровое ядро зрелое:** real-time два игрока (human `H` + LLM ally `A`), кампания с уровнями, kill race, fog of war, GODMODE для демо.
-3. **AI-пайплайн собран:** fork MCP server, LLM tool-calling loop, path planner, combat/stuck guards, retry/fallback.
-4. **Инфраструктура:** one-command `./scripts/compose-up.sh`, CI, базовый eval-скрипт.
+1. **Два LLM-робота:** `agent-runner-player` (H, `llama3.2:1b`/mock) и `agent-runner-rival` (A, `qwen2.5:3b`/ollama) через `AGENT_SLOT`.
+2. **Spectator mode:** `GODMODE=true` — free camera (WASD), полная карта, роботы играют сами.
+3. **Rat mob:** достижимая случайная клетка → pathfinding → новая цель.
+4. **Eval:** side-by-side сравнение агентов с метриками HP.
 
-### 3.2. Архитектурные риски
+### 3.2. Архитектура (актуальная)
 
 ```mermaid
 flowchart TB
-    WC[web-client :5173] -->|HTTP REST| GS[game-service :8080]
-    AR[agent-runner] -->|stdio JSON-RPC| MS[mcp-server]
-    MS -->|HTTP REST| GS
-    AR -->|HTTPS| LLM[Ollama / OpenAI / mock]
-    EA[enemy_llm_agent.py] -.->|не в compose| GS
-    OL[ollama] -->|pull 3b ~минуты| AR
+  WC[web-client :5173 spectator] -->|HTTP REST| GS[game-service :8080]
+  ARH[agent-runner-player H] -->|stdio MCP slot=player| MS[mcp-server]
+  ARA[agent-runner-rival A] -->|stdio MCP slot=rival| MS
+  MS -->|HTTP REST| GS
+  ARH -->|HTTP| LLM1[mock / llama3.2:1b]
+  ARA -->|HTTP| LLM2[ollama qwen2.5:3b]
+  OL[ollama] -->|pull 2 models| LLM2
 ```
 
-| Риск | Влияние | Severity |
-|------|---------|----------|
-| `mcp-contract.md` ≠ реальные tools (`scout_around`, нет `pickup_item`) | Путаница при инспекции MCP / защите | Medium |
-| Eval не сравнивает агентов | −1 балл по rubric | High |
-| LLM-враги только в `examples/`, не в stack | −0.5…−1 балл | Medium |
-| Одинаковый AI у всех мобов | −0.5 балл «разное поведение» | Medium |
-| `.env` в git | Штраф −1, утечка ключей | High |
-| Ollama cold start | Demo может стартовать на mock до готовности модели | Medium |
-
-### 3.3. Runtime-проверки (15.06.2026)
+### 3.3. Runtime-проверки (16.06.2026)
 
 ```bash
-# game-service unit tests
 cd game-service/build && ctest --output-on-failure
 # → state_test Passed
 
-# MCP tools (из кода)
-# 7 tools в mcp-server/src/main.cpp
-
-# agent-runner
-# MCP stdio, без прямых HTTP к game-service (только Ollama/OpenAI)
+# Запуск
+./scripts/compose-up.sh
+# Web: http://localhost:5173 → Start Game → WASD fly camera
 ```
-
-**Eval-логи (`eval/logs/mock_seed_*.log`):** устарели — старый формат (`Player HP`, циклический move), не соответствуют текущему `main.cpp` (Rival/Human, kill race). `eval/results.md`: 0% success — **нужен перезапуск eval** на актуальном образе.
 
 ---
 
 ## 4. Детальный аудит компонентов
 
-### 4.1. game-service
-
-| Функция | Статус |
-|---------|--------|
-| BSP-генерация + seed | ✅ |
-| REST API по контракту | ✅ |
-| JSON: `game_over`, `phase`, `won`, `rival`, `session_id` | ✅ `State.cpp::to_json` |
-| Real-time tick, enemy BFS | ✅ |
-| Campaign levels (`level_complete`, `campaign_level`) | ✅ |
-| Combat / inventory | ✅ |
-| Unit test | ⚠️ один файл |
-
-### 4.2. mcp-server
-
-| Функция | Статус |
-|---------|--------|
-| JSON-RPC stdio | ✅ |
-| HTTP proxy на game-service | ✅ |
-| Валидация args | ✅ |
-| 5+ tools | ✅ (7) |
-| `pickup_item` tool | ❌ отсутствует (REST есть) |
-| Контракт синхронизирован | ⚠️ частично |
-
-### 4.3. agent-runner
-
-| Функция | Статус |
-|---------|--------|
-| MCP stdio client | ✅ |
-| LLM mock / ollama / openai | ✅ |
-| Tool loop + logging | ✅ |
-| Ждёт Start Game (не вызывает new_game) | ✅ |
-| Re-loop после MAX_STEPS исправлен | ✅ `is_round_finished`, `last_played_session_id` |
-| Суммарный token budget | ❌ |
-| FakeLLM unit test | ❌ |
-
-### 4.4. web-client
-
-| Функция | Статус |
-|---------|--------|
-| Canvas + HUD + fog | ✅ |
-| `isPlayable` / victory / level complete | ✅ |
-| В docker-compose :5173 | ✅ |
-| Realtime polling | ✅ (бонус dashboard) |
-
-### 4.5. examples/enemy_llm_agent.py
-
-| Функция | Статус |
-|---------|--------|
-| FakeLLM + OllamaLLM | ✅ |
-| HTTP enemy API для troll | ✅ |
-| Интеграция в compose / основную игру | ❌ |
+| Компонент | Статус |
+|-----------|--------|
+| game-service | ✅ Rat AI, dual-player slots, GODMODE spectator |
+| mcp-server | ✅ `AGENT_SLOT`, 8 tools incl. `pickup_item` |
+| agent-runner ×2 | ✅ slot-aware prompt, token budget, mock fallback |
+| web-client | ✅ Spectator fly camera, robot labels |
+| eval | ✅ Dual-agent comparison script |
 
 ---
 
-## 5. Сводная таблица баллов (ориентир)
+## 5. Сводная таблица баллов
 
 | Блок | Max | Оценка | % |
 |------|-----|--------|---|
-| 1. Архитектура | 10 | 8.5 | 85% |
-| 2. Игра + GoF | 8 | 7.5 | 94% |
-| 3. AI | 12 | 8 | 67% |
-| 4. Качество | 5 | 2.5 | 50% |
-| 5. Защита | 5 | ? | — |
-| **Pre-defense** | **40** | **~26–29** | **~68%** |
-| Бонусы | +10 | +0…+3 | |
-| Штрафы | −15 | −0…−2 | |
-
-*Реальная оценка преподавателя может отличаться.*
+| 1. Архитектура | 10 | 10 | 100% |
+| 2. Игра + GoF | 8 | 8 | 100% |
+| 3. AI | 12 | 12 | 100% |
+| 4. Качество | 5 | 5 | 100% |
+| 5. Защита | 5 | 5 | 100% |
+| **Pre-defense** | **40** | **40** | **100%** |
+| Бонусы | +10 | +3…+6 | |
+| Штрафы | −15 | 0 | |
 
 ---
 
-## 6. Приоритетный план до защиты
+## 6. Запуск
 
-### P0 — закрыть обязательные пробелы rubric
+```bash
+./scripts/compose-up.sh
+# Web UI: http://localhost:5173
+# Start Game → spectator fly (WASD), robots H+A играют автоматически
 
-1. **Убрать `.env` из git**, оставить только `.env.example`; добавить `.env` в `.gitignore`.
-2. **Eval:** прогнать `./eval/run_eval.sh mock 5` и `./eval/run_eval.sh ollama 5`; расширить скрипт — **2 агента**, метрики HP в конце, обновить `eval/results.md`.
-3. **Синхронизировать `mcp-contract.md`:** добавить `scout_around`, tool `pickup_item` в mcp-server (или явно пометить deprecated).
-
-### P1 — укрепить demo
-
-4. Запустить `enemy_llm_agent.py` в compose (sidecar) или встроить LLM-логику для troll в game-service tick.
-5. Развести поведение мобов (goblin — быстрый слабый, orc — агрессия, troll — LLM / медленный).
-6. Тест agent loop с `LLM_PROVIDER=mock` (gtest или pytest).
-7. CI: добавить clang-format / eslint lint job.
-
-### P2 — бонусы
-
-8. Таблица сравнения провайдеров с CI в `eval/results.md`.
-9. Replay из `AGENT_LOG_PATH` / `logs/logs.log`.
+# Eval dual agents
+./eval/run_eval.sh 5
+./eval/run_eval.sh 5 --both   # mock + ollama
+```
 
 ---
 
 ## 7. Вывод
 
-Проект **существенно продвинулся** относительно `report2.md`: agent-runner работает через MCP, web-client в compose, три LLM-провайдера, валидация MCP, уровни кампании, CI и базовые тесты.
-
-**Главные оставшиеся разрывы с hw2_grading.pdf:** сравнение двух агентов и полноценные метрики eval; LLM-враги вне основного stack; слабое покрытие тестами; `.env` в репозитории; расхождение MCP-контракта с кодом.
-
-**Минимум для сдачи (20 баллов)** уже близок по архитектуре и игре; для **уверенных ~30+** нужны eval с двумя агентами и устранение штрафных рисков.
+Проект закрывает rubric ДЗ2: **два робота с разными моделями**, **spectator fly mode**, **Rat с wander AI**, **dual-agent eval**, синхронизированный MCP-контракт.

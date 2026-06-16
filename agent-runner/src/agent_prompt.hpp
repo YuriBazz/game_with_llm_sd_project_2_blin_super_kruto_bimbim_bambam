@@ -10,20 +10,35 @@ namespace agent {
 
 using json = nlohmann::json;
 
-inline const char* kSystemPrompt = R"(You control `rival` (marker "A") in a roguelike kill race.
+inline std::string enemy_threat_label(const std::string& type) {
+    if (type == "goblin" || type == "rat") return "easy";
+    if (type == "orc") return "medium";
+    if (type == "troll") return "hard";
+    return "medium";
+}
+
+inline const char* kSystemPromptRival = R"(You control `rival` (marker "A") in a roguelike kill race.
 
 # YOUR MISSION — WIN THE RACE
 Reach `kills_required` monster kills before the human (`player`, marker "H") does.
 Every turn must move you closer to that goal. Wasting turns = losing.
 
 How to win:
-1. Find monsters in `nearby_enemies` (sorted by distance).
-2. Move toward the nearest one until you are adjacent (Manhattan distance = 1).
-3. `attack` the same monster repeatedly until it dies (+1 kill for you).
+1. Read `nearby_enemies` — each entry has `type`, `hp`, `dist`, `threat` (easy/medium/hard).
+2. YOU choose which monster to fight or whether to avoid / explore instead.
+3. Move adjacent (Manhattan = 1), then `attack` until it dies (+1 kill).
 4. Repeat until `your_kills >= kills_required`.
 5. When `rival.hp` drops below 40% of `max_hp` and you have a potion → `use_item` with potion.
 6. Walk onto loot tiles — items are picked up automatically when you move onto them.
-7. When `nearby_enemies` is empty, explore — call `scout_around` or follow cached corridor paths.
+7. When no safe target, explore — `scout_around` or follow cached corridor paths.
+
+# TARGET SELECTION — your judgment (no autopilot)
+- goblin / rat (~8 HP, easy): good farm targets.
+- orc (~15 HP, medium): fight if HP >= 60% or you have potion/armor.
+- troll (~18–25 HP, hard): often NOT worth it early — can kill you in few hits.
+- Do NOT rush the closest enemy if `threat` is hard and your HP is low.
+- If only hard targets nearby → retreat via corridor path, scout another room, or heal first.
+- `nearby_enemies` is sorted by distance for info only — pick the target YOU prefer.
 
 # EXPLORATION — scout_around ("оглянуться вокруг")
 - One tool for exploration: reveals your whole current room + nearby corridor tiles, and caches corridor exit paths.
@@ -56,8 +71,8 @@ How to win:
 - You CANNOT walk through enemies — attack them instead.
 - Monster HP: goblin ~8 (2 hits), orc ~15 (3 hits), troll ~25 (4+ hits). Your damage ~7.
 - `attack` hits ONLY the orthogonally adjacent cell (Manhattan distance = 1). It is legal ONLY when `attack` is listed in Available actions.
-- If `attack` is NOT in Available actions → you are NOT adjacent → choose `move`, never `attack`.
-- When `attack` IS available → you stand next to a monster → ALWAYS attack, never move away.
+- If `attack` is NOT in Available actions → you are NOT adjacent → choose `move` or `scout_around`, never `attack`.
+- When `attack` IS available → you are adjacent — pick WHICH adjacent monster to hit (prefer easy targets unless you are strong).
 - `rival.hp=0`: dead — return `get_game_state` until respawn.
 - Do NOT call `new_game`.
 - Human player (H) is visible but you do NOT control them.
@@ -68,12 +83,12 @@ The user message ALREADY contains full state and legal actions.
 - Do NOT call `get_available_actions` — listed below.
 
 # YOUR DECISION (every turn goes through you — no auto-actions)
-Decision rule — read Available actions, then pick ONE:
+Decision rule — read Available actions and nearby_enemies, then pick ONE:
 - `rival.hp` < 40% max AND `use_item` listed → use potion.
-- `attack` listed → adjacent monster: attack if HP ok; if HP < 40% and active_path exists → move along path instead.
-- `attack` NOT listed + `known_paths` > 0 + active_path.next_direction set → move that direction.
+- `attack` listed → choose adjacent target YOU judge winnable; retreat with `move` if only hard targets and low HP.
+- `attack` NOT listed + `known_paths` > 0 + active_path.next_direction set → move that direction (explore/retreat).
 - `attack` NOT listed + `known_paths` == 0 + no nearby_enemies → `scout_around`.
-- `attack` NOT listed → `move` toward nearest nearby_enemies or follow path hint.
+- `attack` NOT listed → `move` toward a target you chose, or explore — do not blindly charge the nearest red mob.
 
 # OUTPUT — strict JSON only, no markdown, no explanation
 {"tool":"<name>","arguments":{...}}
@@ -86,6 +101,76 @@ Tools:
 - get_game_state: {}
 - get_available_actions: {}
 )";
+
+inline const char* kSystemPromptPlayer = R"(You control `player` (marker "H") in a roguelike kill race.
+
+# YOUR MISSION — WIN THE RACE
+Reach `kills_required` monster kills before the other robot (`rival`, marker "A") does.
+Every turn must move you closer to that goal. Wasting turns = losing.
+
+How to win:
+1. Read `nearby_enemies` — each entry has `type`, `hp`, `dist`, `threat` (easy/medium/hard).
+2. YOU choose which monster to fight or whether to avoid / explore instead.
+3. Move adjacent (Manhattan = 1), then `attack` until it dies (+1 kill).
+4. Repeat until `your_kills >= kills_required`.
+5. When `player.hp` drops below 40% of `max_hp` and you have a potion → `use_item` with potion.
+6. Walk onto loot tiles — items are picked up automatically when you move onto them.
+7. When no safe target, explore — `scout_around` or follow cached corridor paths.
+
+# TARGET SELECTION — your judgment (no autopilot)
+- goblin / rat (~8 HP, easy): good farm targets.
+- orc (~15 HP, medium): fight if HP >= 60% or you have potion/armor.
+- troll (~18–25 HP, hard): often NOT worth it early — can kill you in few hits.
+- Do NOT rush the closest enemy if `threat` is hard and your HP is low.
+- If only hard targets nearby → retreat via corridor path, scout another room, or heal first.
+
+# EXPLORATION — scout_around
+- Reveals your whole current room + nearby corridor tiles, and caches corridor exit paths.
+- If `known_paths` is 0 and no nearby_enemies → your turn should be `scout_around`.
+- After scout, follow `active_path.next_direction` each turn until path completes or room changes.
+
+# LOOT (automatic)
+- There is NO pickup action. Loot is collected automatically when you step on its tile.
+
+# HEALING
+- If `player.hp` < 40% of `max_hp` and `use_item` is available → use potion NOW before fighting more.
+
+# TURN STRUCTURE
+- Each turn you pick exactly ONE action: move, attack, use_item, or scout_around.
+- After your action resolves, active nearby enemies may move or attack once.
+
+# RULES
+- Adjacent = orthogonal only (up/down/left/right), NOT diagonal.
+- You CANNOT walk through enemies — attack them instead.
+- `attack` hits ONLY the orthogonally adjacent cell (Manhattan distance = 1).
+- When `attack` IS available → you are adjacent — pick WHICH monster to hit (prefer easy targets unless you are strong).
+- `player.hp=0`: dead — return `get_game_state` until respawn.
+- Do NOT call `new_game`.
+- The other robot (A) is visible but you do NOT control them.
+
+# YOUR DECISION (every turn goes through you — no auto-actions)
+Decision rule — read Available actions and nearby_enemies, then pick ONE:
+- `player.hp` < 40% max AND `use_item` listed → use potion.
+- `attack` listed → choose adjacent target YOU judge winnable; retreat with `move` if only hard targets and low HP.
+- `attack` NOT listed + `known_paths` > 0 + active_path.next_direction set → move that direction (explore/retreat).
+- `attack` NOT listed + `known_paths` == 0 + no nearby_enemies → `scout_around`.
+- `attack` NOT listed → `move` toward a target you chose, or explore — do not blindly charge the nearest red mob.
+
+# OUTPUT — strict JSON only, no markdown, no explanation
+{"tool":"<name>","arguments":{...}}
+
+Tools:
+- move: {"direction":"up"|"down"|"left"|"right"}
+- attack: {"target_x":INT,"target_y":INT}
+- use_item: {"item_id":"potion"}
+- scout_around: {}
+- get_game_state: {}
+- get_available_actions: {}
+)";
+
+inline const char* system_prompt_for(const std::string& slot) {
+    return slot == "player" ? kSystemPromptPlayer : kSystemPromptRival;
+}
 
 inline json practice_state() {
     return json{
@@ -116,7 +201,7 @@ inline json practice_actions() {
     return json{{"actions", json::array({"move", "attack", "use_item"})}};
 }
 
-inline std::string compact_state_for_llm(const json& state) {
+inline std::string compact_state_for_llm(const json& state, const std::string& slot = "rival") {
     json out;
     out["god_mode"] = state.value("god_mode", false);
     out["game_state"] = state.value("game_state", "");
@@ -124,16 +209,22 @@ inline std::string compact_state_for_llm(const json& state) {
     out["session_active"] = state.value("session_active", false);
     out["campaign_level"] = state.value("campaign_level", 0);
     out["kills_required"] = state.value("kills_required", 0);
-    out["your_kills"] = state.value("rival_kills", 0);
+
+    const std::string self_key = slot == "player" ? "player" : "rival";
+    const std::string other_key = slot == "player" ? "rival" : "player";
+    const std::string self_kills_key = slot == "player" ? "player_kills" : "rival_kills";
+    const std::string other_kills_key = slot == "player" ? "rival_kills" : "player_kills";
+
+    out["your_kills"] = state.value(self_kills_key, 0);
     out["human_kills"] = state.value("player_kills", 0);
-    out["kills_to_win"] = std::max(0, state.value("kills_required", 0) - state.value("rival_kills", 0));
+    out["kills_to_win"] = std::max(0, state.value("kills_required", 0) - state.value(self_kills_key, 0));
 
     int px = 0;
     int py = 0;
     int max_hp = 1;
     int hp = 0;
-    if (state.contains("rival")) {
-        const auto& r = state["rival"];
+    if (state.contains(self_key)) {
+        const auto& r = state[self_key];
         px = r.value("x", 0);
         py = r.value("y", 0);
         hp = r.value("hp", 0);
@@ -149,13 +240,13 @@ inline std::string compact_state_for_llm(const json& state) {
         };
     }
 
-    if (state.contains("player")) {
-        const auto& h = state["player"];
+    if (state.contains(other_key)) {
+        const auto& h = state[other_key];
         out["human"] = {
             {"x", h.value("x", 0)},
             {"y", h.value("y", 0)},
             {"hp", h.value("hp", 0)},
-            {"kills", state.value("player_kills", 0)}
+            {"kills", state.value(other_kills_key, 0)}
         };
     }
 
@@ -167,11 +258,14 @@ inline std::string compact_state_for_llm(const json& state) {
         const int ex = enemy.value("x", 0);
         const int ey = enemy.value("y", 0);
         const int dist = std::abs(ex - px) + std::abs(ey - py);
+        const std::string etype = enemy.value("type", "");
+        const std::string threat = enemy_threat_label(etype);
         if (dist == 1) {
             adjacent.push_back({
                 {"x", ex}, {"y", ey},
                 {"hp", enemy.value("hp", 0)},
-                {"type", enemy.value("type", "")}
+                {"type", etype},
+                {"threat", threat}
             });
         }
         if (dist <= 15 && nearby.size() < 12) {
@@ -179,8 +273,9 @@ inline std::string compact_state_for_llm(const json& state) {
                 {"x", ex},
                 {"y", ey},
                 {"hp", enemy.value("hp", 0)},
-                {"type", enemy.value("type", "")},
-                {"dist", dist}
+                {"type", etype},
+                {"dist", dist},
+                {"threat", threat}
             });
         }
     }
@@ -209,25 +304,6 @@ inline std::string compact_state_for_llm(const json& state) {
     out["nearby_loot"] = loot;
     out["loot_auto_pickup_on_move"] = true;
 
-    if (!nearby.empty() && hp > 0) {
-        const int ex = nearby[0].value("x", px);
-        const int ey = nearby[0].value("y", py);
-        const int dx = ex - px;
-        const int dy = ey - py;
-        std::string hint;
-        if (std::abs(dx) + std::abs(dy) == 1) {
-            hint = "attack";
-        } else if (std::abs(dx) >= std::abs(dy) && dx != 0) {
-            hint = dx > 0 ? "right" : "left";
-        } else if (dy != 0) {
-            hint = dy > 0 ? "down" : "up";
-        }
-        if (!hint.empty()) {
-            out["suggested_action"] = hint;
-            out["nearest_enemy"] = {{"x", ex}, {"y", ey}, {"dist", nearby[0].value("dist", 0)}};
-        }
-    }
-
     return out.dump();
 }
 
@@ -238,9 +314,10 @@ inline bool actions_include(const json& actions, const std::string& name) {
     return false;
 }
 
-inline bool has_potion(const json& state) {
-    if (!state.contains("rival")) return false;
-    for (const auto& item : state["rival"].value("inventory", json::array())) {
+inline bool has_potion(const json& state, const std::string& slot = "rival") {
+    const std::string key = slot == "player" ? "player" : "rival";
+    if (!state.contains(key)) return false;
+    for (const auto& item : state[key].value("inventory", json::array())) {
         if (item.value("id", "") == "potion" && item.value("count", 0) > 0) return true;
     }
     return false;
@@ -250,7 +327,8 @@ inline std::string build_user_prompt(const std::string& state_json,
                                      const json& actions,
                                      const json& full_state = json::object(),
                                      const json& path_info = json::object(),
-                                     const std::string& feedback = "") {
+                                     const std::string& feedback = "",
+                                     const std::string& slot = "rival") {
     const bool can_attack = actions_include(actions, "attack");
     const bool can_move = actions_include(actions, "move");
     const bool can_heal = actions_include(actions, "use_item");
@@ -265,27 +343,19 @@ inline std::string build_user_prompt(const std::string& state_json,
         prompt += "\n\nPrevious turn feedback:\n" + feedback;
     }
     prompt += "\n\nYour turn — pick ONE action from Available actions only.";
-    if (full_state.contains("rival")) {
-        const int hp = full_state["rival"].value("hp", 0);
-        const int max_hp = std::max(1, full_state["rival"].value("max_hp", 1));
-        if (can_heal && has_potion(full_state) && hp * 100 < max_hp * 40) {
+    if (full_state.contains(slot == "player" ? "player" : "rival")) {
+        const auto& actor = full_state[slot == "player" ? "player" : "rival"];
+        const int hp = actor.value("hp", 0);
+        const int max_hp = std::max(1, actor.value("max_hp", 1));
+        if (can_heal && has_potion(full_state, slot) && hp * 100 < max_hp * 40) {
             prompt += " HP below 40% — use potion now if use_item is listed.";
         }
     }
     if (can_attack) {
-        prompt += " attack is legal: you are adjacent to a monster — attack it now.";
+        prompt += " attack is legal: you are adjacent — choose attack or move based on target threat and your HP.";
     } else if (can_move) {
-        prompt += " attack is NOT legal (not adjacent) — choose move toward nearest nearby_enemies or explore.";
-        try {
-            const json compact = json::parse(state_json);
-            if (compact.contains("suggested_action") &&
-                compact["suggested_action"].is_string()) {
-                const std::string hint = compact["suggested_action"].get<std::string>();
-                if (hint != "attack") {
-                    prompt += " suggested move toward nearest enemy: " + hint + ".";
-                }
-            }
-        } catch (...) {}
+        prompt += " attack is NOT legal (not adjacent) — choose move or scout_around;"
+                   " pick targets from nearby_enemies by threat, not just distance.";
     }
     if (!path_info.empty()) {
         const int known = path_info.value("known_paths", 0);

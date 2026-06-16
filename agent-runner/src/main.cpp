@@ -9,6 +9,7 @@
 #include <thread>
 #include <iomanip>
 #include <sstream>
+#include <atomic>
 
 using json = nlohmann::json;
 
@@ -44,24 +45,31 @@ bool is_session_running(const json& state) {
            state.value("game_state", "") == "running";
 }
 
-void wait_for_start_game(McpClient& mcp, LLMClient& llm, int& last_played_session_id) {
+void wait_for_game_session(McpClient& mcp, LLMClient& llm, int& last_played_session_id,
+                           const std::string& agent_label) {
     int wait_seconds = 0;
     while (true) {
         json state = mcp.call_tool("get_game_state");
         const int session_id = state.value("session_id", 0);
         if (is_session_running(state) && session_id != last_played_session_id) {
-            std::cout << "Game session started (id=" << session_id << ") — LLM ally joining."
-                      << std::endl;
+            std::cout << "Game session " << session_id << " started — robot "
+                      << agent_label << " joining." << std::endl;
             return;
         }
         if (wait_seconds > 0 && wait_seconds % 120 == 0) {
             llm.ping_ollama_keep_alive();
         }
         if (wait_seconds % 10 == 0) {
-            std::cout << "Waiting for human to press Start Game..." << std::endl;
+            std::cout << "Waiting for game session (Start Game / auto-start)..." << std::endl;
         }
         ++wait_seconds;
         std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+
+void wait_for_provider(LLMClient& llm, std::atomic<bool>& provider_ready) {
+    while (!provider_ready.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 }
 
@@ -70,15 +78,24 @@ void wait_for_start_game(McpClient& mcp, LLMClient& llm, int& last_played_sessio
 int main() {
     const int max_steps = std::stoi(std::getenv("MAX_STEPS") ?: "500");
     const char* log_path = std::getenv("AGENT_LOG_PATH");
+    const char* agent_slot_env = std::getenv("AGENT_SLOT");
+    const std::string agent_slot = agent_slot_env ? agent_slot_env : "rival";
+    const char* agent_label_env = std::getenv("AGENT_LABEL");
+    const std::string agent_label = agent_label_env ? agent_label_env : (agent_slot == "player" ? "H" : "A");
 
     std::ofstream log_file;
     if (log_path) {
         log_file.open(log_path, std::ios::trunc);
     }
 
-    std::cout << "Agent runner starting (MCP mode)..." << std::endl;
+    const char* provider_env = std::getenv("LLM_PROVIDER");
+    const char* model_env = std::getenv("OLLAMA_MODEL");
+    std::cout << "Agent runner starting (MCP mode, slot=" << agent_slot
+              << ", label=" << agent_label << ")..." << std::endl;
+    std::cout << "LLM provider=" << (provider_env ? provider_env : "mock")
+              << " model=" << (model_env ? model_env : "(default)")
+              << std::endl;
     std::cout << "Max steps per round: " << max_steps << std::endl;
-    std::cout << "Will NOT start a game — waiting for Start Game in browser." << std::endl;
 
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
         std::cerr << "curl_global_init failed" << std::endl;
@@ -96,23 +113,27 @@ int main() {
         try {
             const json probe = mcp->call_tool("get_game_state");
             urgent_join = is_session_running(probe);
-            if (urgent_join) {
-                std::cout << "Active game detected — fast-start (skip Ollama practice warmup)."
-                          << std::endl;
-            }
         } catch (...) {}
 
-        llm->wait_for_provider_ready(urgent_join);
+        std::atomic<bool> provider_ready{false};
+        std::thread provider_thread([&llm, urgent_join, &provider_ready]() {
+            llm->wait_for_provider_ready(urgent_join);
+            provider_ready.store(true);
+        });
 
         int last_played_session_id = -1;
         while (true) {
-            wait_for_start_game(*mcp, *llm, last_played_session_id);
+            wait_for_game_session(*mcp, *llm, last_played_session_id, agent_label);
+            wait_for_provider(*llm, provider_ready);
 
             json state = mcp->call_tool("get_game_state");
             const int session_id = state.value("session_id", 0);
             llm->reset_session(session_id);
             llm->rewarm_before_game();
             last_played_session_id = session_id;
+
+            std::cout << "Robot " << agent_label << " ready — entering kill race."
+                      << std::endl;
 
             for (int step = 0; step < max_steps; ++step) {
                 llm->ensure_session(state);
@@ -124,31 +145,29 @@ int main() {
                     break;
                 }
 
-                std::cout << "\n=== Step " << step << " ===" << std::endl;
-                if (state.contains("rival")) {
-                    std::cout << "Rival (A) HP: " << state["rival"]["hp"]
-                              << " Position: [" << state["rival"]["x"] << ", "
-                              << state["rival"]["y"] << "]" << std::endl;
-                }
-                if (state.contains("player")) {
-                    std::cout << "Human (H) at [" << state["player"]["x"] << ", "
-                              << state["player"]["y"] << "]" << std::endl;
+                std::cout << "\n=== Step " << step << " [" << agent_label << "] ===" << std::endl;
+                if (state.contains(agent_slot)) {
+                    const auto& self = state[agent_slot];
+                    std::cout << "Robot " << agent_label << " HP: " << self.value("hp", 0)
+                              << " at [" << self.value("x", 0) << ", "
+                              << self.value("y", 0) << "]" << std::endl;
                 }
 
                 json actions = mcp->call_tool("get_available_actions");
                 const auto action_list = actions.value("actions", json::array());
+                const std::string kills_key = agent_slot == "player" ? "player_kills" : "rival_kills";
                 std::cout << "Actions: " << action_list.dump()
-                          << " | kills A=" << state.value("rival_kills", 0)
+                          << " | kills " << agent_label << "=" << state.value(kills_key, 0)
                           << "/" << state.value("kills_required", 0)
                           << " | known_paths=" << llm->path_planner().summary_for_prompt().value("known_paths", 0)
                           << std::endl;
 
                 std::optional<json> decision_opt;
-                const int rival_hp = state.contains("rival")
-                    ? state["rival"].value("hp", 0)
+                const int actor_hp = state.contains(agent_slot)
+                    ? state[agent_slot].value("hp", 0)
                     : 0;
-                if (rival_hp <= 0) {
-                    std::cout << "Rival dead — waiting for respawn..." << std::endl;
+                if (actor_hp <= 0) {
+                    std::cout << "Robot " << agent_label << " dead — waiting for respawn..." << std::endl;
                     decision_opt = json{
                         {"tool", "get_game_state"},
                         {"arguments", json::object()}
@@ -167,11 +186,12 @@ int main() {
                     break;
                 }
                 json decision = *decision_opt;
+                const json agent_view = llm->agent_view(state);
                 try {
-                    decision = llm->apply_combat_guard(decision, state, actions);
-                    decision = llm->apply_path_guard(decision, state, actions);
-                    decision = llm->apply_query_guard(decision, state, actions);
-                    decision = llm->apply_stuck_guard(decision, state, actions);
+                    decision = llm->apply_combat_guard(decision, agent_view, actions);
+                    decision = llm->apply_path_guard(decision, agent_view, actions);
+                    decision = llm->apply_query_guard(decision, agent_view, actions);
+                    decision = llm->apply_stuck_guard(decision, agent_view, actions);
                 } catch (const std::exception& e) {
                     std::cerr << "Action guard failed: " << e.what()
                               << " — falling back to scout_around" << std::endl;
@@ -223,8 +243,8 @@ int main() {
                         final_args.value("direction", ""));
                 }
 
-                std::cout << "Tool call: " << final_tool << " " << final_args.dump()
-                          << std::endl;
+                std::cout << "[" << agent_label << "] Tool call: " << final_tool << " "
+                          << final_args.dump() << std::endl;
 
                 json result = mcp->call_tool(final_tool, final_args);
                 log_tool_call(log_file, step, final_tool, final_args, result);
@@ -238,10 +258,11 @@ int main() {
                 }
 
                 llm->ensure_session(state);
-                llm->note_action_result(final_tool, final_args, result, state);
+                llm->note_action_result(
+                    final_tool, final_args, result, llm->agent_view(state));
             }
 
-            std::cout << "Round finished — waiting for next Start Game / reset..." << std::endl;
+            std::cout << "Round finished — waiting for next game session..." << std::endl;
         }
     } catch (const std::exception& e) {
         std::cerr << "Agent error: " << e.what() << std::endl;

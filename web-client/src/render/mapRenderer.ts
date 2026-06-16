@@ -5,8 +5,8 @@ const COLORS = {
   wall: '#2d2d3d',
   floor: '#3d3d4d',
   player: '#4da6ff',
-  player_god: '#c77dff',
   rival: '#00dd88',
+  spectator: '#c77dff',
   enemy: '#ff4d4d',
   loot: '#ffcc00',
   visible: 'rgba(0, 0, 0, 0)',
@@ -18,7 +18,6 @@ export class MapRenderer {
   ctx: CanvasRenderingContext2D;
   private cameraX: number = 0;
   private cameraY: number = 0;
-  private freeCamera: boolean = false;
 
   constructor(canvasElement: HTMLCanvasElement) {
     this.canvas = canvasElement;
@@ -28,43 +27,54 @@ export class MapRenderer {
   }
 
   setSize(width: number, height: number): void {
-    this.canvas.width = width;
-    this.canvas.height = height;
+    const w = Math.max(1, Math.floor(width));
+    const h = Math.max(1, Math.floor(height));
+    if (this.canvas.width === w && this.canvas.height === h) return;
+    this.canvas.width = w;
+    this.canvas.height = h;
   }
 
-  setFreeCamera(enabled: boolean, anchorX?: number, anchorY?: number): void {
-    this.freeCamera = enabled;
-    if (enabled && anchorX !== undefined && anchorY !== undefined) {
-      this.centerOn(anchorX, anchorY);
-    }
-  }
-
-  centerOn(x: number, y: number): void {
+  centerOn(focusX: number, focusY: number, mapWidth: number, mapHeight: number): void {
     const viewportWidth = this.canvas.width / CELL_SIZE;
     const viewportHeight = this.canvas.height / CELL_SIZE;
-    this.cameraX = Math.max(0, x - Math.floor(viewportWidth / 2));
-    this.cameraY = Math.max(0, y - Math.floor(viewportHeight / 2));
-  }
 
-  updateCamera(playerX: number, playerY: number): void {
-    if (!this.freeCamera) {
-      this.centerOn(playerX, playerY);
+    let camX = focusX - viewportWidth / 2;
+    let camY = focusY - viewportHeight / 2;
+
+    if (mapWidth <= viewportWidth) {
+      const minCamX = -(viewportWidth - mapWidth);
+      camX = Math.max(minCamX, Math.min(camX, 0));
+    } else {
+      camX = Math.max(0, Math.min(camX, mapWidth - viewportWidth));
     }
-  }
 
-  panCamera(dxCells: number, dyCells: number, mapWidth: number, mapHeight: number): void {
-    this.cameraX = Math.max(0, Math.min(mapWidth - 1, this.cameraX + dxCells));
-    this.cameraY = Math.max(0, Math.min(mapHeight - 1, this.cameraY + dyCells));
+    if (mapHeight <= viewportHeight) {
+      const minCamY = -(viewportHeight - mapHeight);
+      camY = Math.max(minCamY, Math.min(camY, 0));
+    } else {
+      camY = Math.max(0, Math.min(camY, mapHeight - viewportHeight));
+    }
+
+    this.cameraX = camX;
+    this.cameraY = camY;
   }
 
   render(store: GameStore): void {
     if (!store.map || !store.state) return;
 
     const { width, height, grid } = store.map;
-    const { player, rival, enemies } = store.state;
-    const godMode = store.state.god_mode === true;
+    const { player, rival, enemies, spectator, god_mode: godModeRaw } = store.state;
+    const godMode = godModeRaw === true;
     const visibleSet = store.getVisibleCellsSet();
     const canSee = (x: number, y: number) => godMode || visibleSet.has(`${x},${y}`);
+
+    if (godMode) {
+      const sx = spectator?.x ?? Math.floor(width / 2);
+      const sy = spectator?.y ?? Math.floor(height / 2);
+      this.centerOn(sx, sy, width, height);
+    } else {
+      this.centerOn(player.x, player.y, width, height);
+    }
 
     this.ctx.fillStyle = '#1a1a2e';
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
@@ -133,7 +143,7 @@ export class MapRenderer {
         screenY + CELL_SIZE >= 0 &&
         screenY <= this.canvas.height
       ) {
-        this.ctx.fillStyle = COLORS.enemy;
+        this.ctx.fillStyle = enemy.type === 'rat' ? '#c8a060' : COLORS.enemy;
         this.ctx.fillRect(screenX + 2, screenY + 2, CELL_SIZE - 4, CELL_SIZE - 4);
 
         this.ctx.fillStyle = '#1a1a2e';
@@ -153,9 +163,10 @@ export class MapRenderer {
       y: number,
       label: string,
       fillColor: string,
-      fontSize: string
+      fontSize: string,
+      alwaysVisible = false
     ): void => {
-      if (!canSee(x, y)) return;
+      if (!alwaysVisible && !canSee(x, y)) return;
       const screenX = (x - this.cameraX) * CELL_SIZE;
       const screenY = (y - this.cameraY) * CELL_SIZE;
       if (
@@ -168,6 +179,11 @@ export class MapRenderer {
       }
       this.ctx.fillStyle = fillColor;
       this.ctx.fillRect(screenX + 2, screenY + 2, CELL_SIZE - 4, CELL_SIZE - 4);
+      if (label === 'O') {
+        this.ctx.strokeStyle = '#ffffff';
+        this.ctx.lineWidth = 2;
+        this.ctx.strokeRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+      }
       this.ctx.fillStyle = '#1a1a2e';
       this.ctx.font = fontSize;
       this.ctx.textAlign = 'center';
@@ -179,13 +195,15 @@ export class MapRenderer {
       drawActor(rival.x, rival.y, 'A', COLORS.rival, 'bold 12px monospace');
     }
 
-    drawActor(
-      player.x,
-      player.y,
-      'H',
-      godMode ? COLORS.player_god : COLORS.player,
-      'bold 12px monospace'
-    );
+    drawActor(player.x, player.y, 'H', COLORS.player, 'bold 12px monospace');
+
+    if (godMode && spectator) {
+      drawActor(spectator.x, spectator.y, 'O', COLORS.spectator, 'bold 11px monospace', true);
+    } else if (godMode && !spectator) {
+      const sx = Math.floor(width / 2);
+      const sy = Math.floor(height / 2);
+      drawActor(sx, sy, 'O', COLORS.spectator, 'bold 11px monospace', true);
+    }
   }
 
   getWorldCoordinates(screenX: number, screenY: number): { x: number; y: number } {

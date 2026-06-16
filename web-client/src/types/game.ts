@@ -50,13 +50,14 @@ export interface GameState {
   max_enemies_on_level?: number;
   level_winner?: 'none' | 'human' | 'ai';
   god_mode?: boolean;
+  spectator?: { x: number; y: number };
   steps: number;
   map_loot: Loot[];
 }
 
 export function isPlayable(state: GameState): boolean {
+  if (state.god_mode) return false;
   if (isLevelComplete(state)) return false;
-  if (state.god_mode) return state.game_state === 'running' || state.phase === 'realtime';
   if (state.game_over || state.won) return false;
   if (state.phase === 'realtime' || state.phase === 'player_turn') return true;
   return state.game_state === 'running';

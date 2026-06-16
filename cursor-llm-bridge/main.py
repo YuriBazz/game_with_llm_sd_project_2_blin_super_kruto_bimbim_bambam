@@ -215,7 +215,12 @@ def health() -> dict[str, Any]:
                 **budget,
                 "detail": exc.detail,
             }
-        raise
+        return {
+            "status": "degraded",
+            "model_default": DEFAULT_MODEL,
+            **budget,
+            "health_probe": {"probe": "failed", "detail": exc.detail},
+        }
 
     status = "ok" if probe.get("probe") in {"ok", "skipped"} else "degraded"
     return {

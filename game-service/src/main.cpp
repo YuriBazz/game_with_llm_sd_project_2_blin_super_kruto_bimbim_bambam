@@ -56,6 +56,27 @@ std::string action_slot_from(const httplib::Request& req, const json& body) {
     return "player";
 }
 
+bool is_agent_request(const httplib::Request& req) {
+    return req.get_header_value("X-Controlled-By") == "agent";
+}
+
+bool reject_human_actor_control(const game::State& state,
+                                const httplib::Request& req,
+                                const std::string& slot,
+                                httplib::Response& res) {
+    if (!state.god_mode || is_agent_request(req)) {
+        return false;
+    }
+    if (slot != "player" && slot != "rival") {
+        return false;
+    }
+    res.status = 403;
+    res.set_content(
+        R"({"success": false, "error": "Spectator mode: H/A are LLM-controlled. Use POST /api/spectator/move for observer."})",
+        "application/json");
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -65,7 +86,10 @@ int main() {
     game::State state(rng);
     state.god_mode = env_god_mode_enabled();
     if (state.god_mode) {
-        std::cout << "GODMODE enabled: spectator camera — player controlled via /api/*" << std::endl;
+        std::cout << "GODMODE enabled: spectator entity separate from robots H and A" << std::endl;
+    } else {
+        std::cout << "GODMODE disabled: set GODMODE=true for spectator (full map + observer O)"
+                  << std::endl;
     }
     std::string map_snapshot;
 
@@ -133,11 +157,40 @@ int main() {
         res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
     });
 
+    svr.Post("/api/spectator/move", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!state.god_mode) {
+            res.status = 403;
+            res.set_content(R"({"success": false, "error": "Spectator mode disabled"})", "application/json");
+            return;
+        }
+        try {
+            const json body = json::parse(req.body);
+            const std::string direction = body.value("direction", "");
+            int dx = 0;
+            int dy = 0;
+            get_dx_dy(direction, dx, dy);
+            const game::MoveResult result = state.move_spectator(dx, dy);
+            json payload = {
+                {"success", result.success},
+                {"x", result.x},
+                {"y", result.y},
+                {"entity", "spectator"}
+            };
+            res.set_content(with_state(payload, state, include_state(req)).dump(), "application/json");
+        } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"success": false, "error": "Invalid JSON"})", "application/json");
+        }
+    });
+
     svr.Post("/api/move", [&](const httplib::Request& req, httplib::Response& res) {
         try {
             const json body = json::parse(req.body);
             const std::string direction = body.value("direction", "unknown");
             const std::string slot = action_slot_from(req, body);
+            if (reject_human_actor_control(state, req, slot, res)) {
+                return;
+            }
 
             int dx = 0;
             int dy = 0;
@@ -165,13 +218,16 @@ int main() {
         try {
             const json body = json::parse(req.body);
             const std::string slot = action_slot_from(req, body);
-            const int actor_x = (slot == "rival") ? state.rival.x : state.player.x;
-            const int actor_y = (slot == "rival") ? state.rival.y : state.player.y;
             if (slot != "player" && slot != "rival") {
                 res.status = 400;
                 res.set_content(R"({"success": false, "error": "Invalid slot"})", "application/json");
                 return;
             }
+            if (reject_human_actor_control(state, req, slot, res)) {
+                return;
+            }
+            const int actor_x = (slot == "rival") ? state.rival.x : state.player.x;
+            const int actor_y = (slot == "rival") ? state.rival.y : state.player.y;
 
             const int target_x = body.value("target_x", actor_x);
             const int target_y = body.value("target_y", actor_y);
@@ -198,6 +254,11 @@ int main() {
             const json body = json::parse(req.body);
             const std::string item_id = body.value("item_id", "");
             const std::string slot = action_slot_from(req, body);
+            if (slot == "player" || slot == "rival") {
+                if (reject_human_actor_control(state, req, slot, res)) {
+                    return;
+                }
+            }
 
             game::UseItemResult result;
             if (!item_id.empty()) {

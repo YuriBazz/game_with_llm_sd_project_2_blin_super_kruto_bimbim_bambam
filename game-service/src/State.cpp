@@ -55,6 +55,8 @@ EnemyTypeStats enemy_stats_for(EnemyType type) {
             return {10, 2};
         case EnemyType::Troll:
             return {18, 3};
+        case EnemyType::Rat:
+            return {3, 1};
     }
     return {6, 1};
 }
@@ -100,7 +102,7 @@ void State::advance_campaign_level() {
 }
 
 bool State::player_blocks_world() const {
-    return !god_mode && player.hp > 0;
+    return player.hp > 0;
 }
 
 Player* State::actor_for_slot(const std::string& slot) {
@@ -120,6 +122,8 @@ bool State::is_rival_actor(const Player& actor) const {
 }
 
 bool State::is_enemy_active(const Enemy& enemy) const {
+    if (enemy.type == EnemyType::Rat) return true;
+
     const int radius_sq = enemy_activation_radius * enemy_activation_radius;
     auto within = [&](int px, int py, int hp) {
         if (hp <= 0) return false;
@@ -128,7 +132,7 @@ bool State::is_enemy_active(const Enemy& enemy) const {
         return dx * dx + dy * dy <= radius_sq;
     };
     if (within(rival.x, rival.y, rival.hp)) return true;
-    if (!god_mode && within(player.x, player.y, player.hp)) return true;
+    if (within(player.x, player.y, player.hp)) return true;
     return false;
 }
 
@@ -189,6 +193,96 @@ std::pair<int, int> State::bfs_next_step(int from_x, int from_y, int to_x, int t
     }
 
     return {0, 0};
+}
+
+std::vector<std::pair<int, int>> State::reachable_cells_from(int from_x, int from_y) const {
+    std::vector<std::pair<int, int>> cells;
+    if (from_x < 0 || from_y < 0 || from_x >= map.width || from_y >= map.height) {
+        return cells;
+    }
+
+    const int width = map.width;
+    const int height = map.height;
+    const auto index = [width](int x, int y) { return y * width + x; };
+    const int start = index(from_x, from_y);
+
+    std::vector<bool> visited(width * height, false);
+    std::queue<std::pair<int, int>> q;
+    q.push({from_x, from_y});
+    visited[start] = true;
+    cells.push_back({from_x, from_y});
+
+    static constexpr int dirs[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
+
+    auto walkable = [&](int x, int y) {
+        if (!map.is_walkable(x, y)) return false;
+        if (has_enemy_at(x, y)) return false;
+        if (player_blocks_world() && player.x == x && player.y == y) return false;
+        if (rival.hp > 0 && rival.x == x && rival.y == y) return false;
+        return true;
+    };
+
+    while (!q.empty()) {
+        const auto [cx, cy] = q.front();
+        q.pop();
+
+        for (const auto& dir : dirs) {
+            const int nx = cx + dir[0];
+            const int ny = cy + dir[1];
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+
+            const int ni = index(nx, ny);
+            if (visited[ni]) continue;
+            if (!walkable(nx, ny)) continue;
+
+            visited[ni] = true;
+            cells.push_back({nx, ny});
+            q.push({nx, ny});
+        }
+    }
+
+    return cells;
+}
+
+void State::process_rat_turn(int enemy_index) {
+    if (enemy_index < 0 || enemy_index >= static_cast<int>(enemies.size())) return;
+
+    Enemy& enemy = enemies[enemy_index];
+    const bool at_target = enemy.target_x >= 0 &&
+                           enemy.x == enemy.target_x &&
+                           enemy.y == enemy.target_y;
+
+    if (enemy.target_x < 0 || at_target) {
+        const auto reachable = reachable_cells_from(enemy.x, enemy.y);
+        if (reachable.empty()) return;
+
+        std::vector<std::pair<int, int>> candidates;
+        candidates.reserve(reachable.size());
+        for (const auto& cell : reachable) {
+            if (cell.first == enemy.x && cell.second == enemy.y) continue;
+            if (cell.first == enemy.target_x && cell.second == enemy.target_y) continue;
+            candidates.push_back(cell);
+        }
+        if (candidates.empty()) {
+            enemy.target_x = -1;
+            enemy.target_y = -1;
+            return;
+        }
+
+        const size_t pick = static_cast<size_t>(rng.get_random(0, static_cast<int>(candidates.size()) - 1));
+        enemy.target_x = candidates[pick].first;
+        enemy.target_y = candidates[pick].second;
+    }
+
+    const auto step = bfs_next_step(enemy.x, enemy.y, enemy.target_x, enemy.target_y);
+    if (step.first != 0 || step.second != 0) {
+        enemy_move(enemy_index, step.first, step.second);
+        return;
+    }
+
+    // Blocked or stuck — pick a different wander target next turn.
+    enemy.target_x = -1;
+    enemy.target_y = -1;
 }
 
 void State::credit_kill(const Player& killer) {
@@ -330,6 +424,8 @@ void State::start_new_game(const MapOptions &options) {
     }
 
     spawn_enemies(4 + campaign_level * 2);
+    spectator.x = map.width / 2;
+    spectator.y = map.height / 2;
     ++session_id;
     session_active = true;
 }
@@ -428,10 +524,6 @@ void State::process_realtime_tick() {
     if (state != GameState::Running || !session_active) return;
 
     try_respawn_players();
-
-    // Enemies act only after a player action (move/attack/etc.), not on background ticks.
-    // Background ticks handle respawns and wave spawning only.
-    if (god_mode) return;
 
     ++wave_tick_counter;
     if (wave_tick_counter >= kWaveIntervalTicks) {
@@ -607,36 +699,32 @@ MoveResult State::move_slot(const std::string& slot, int dx, int dy) {
     Player* actor = actor_for_slot(slot);
     if (!actor) return {};
 
-    if (slot == "player" && god_mode) {
-        MoveResult result;
-        if (state != GameState::Running) return result;
+    auto result = move_actor(*actor, dx, dy, actor->x, actor->y);
+    if (result.success) process_enemy_turns();
+    return result;
+}
 
-        const int target_x = actor->x + dx;
-        const int target_y = actor->y + dy;
-        if (target_x < 0 || target_x >= map.width || target_y < 0 || target_y >= map.height) {
-            return result;
-        }
+MoveResult State::move_spectator(int dx, int dy) {
+    MoveResult result;
+    if (!god_mode || state != GameState::Running) return result;
 
-        actor->x = target_x;
-        actor->y = target_y;
-        result.success = true;
-        result.x = actor->x;
-        result.y = actor->y;
-        collect_loot_at(*actor);
-        player_last_action_time = steps;
-        steps++;
+    const int target_x = spectator.x + dx;
+    const int target_y = spectator.y + dy;
+    if (target_x < 0 || target_x >= map.width || target_y < 0 || target_y >= map.height) {
         return result;
     }
 
-    auto result = move_actor(*actor, dx, dy, actor->x, actor->y);
-    if (result.success) process_enemy_turns();
+    spectator.x = target_x;
+    spectator.y = target_y;
+    result.success = true;
+    result.x = spectator.x;
+    result.y = spectator.y;
     return result;
 }
 
 AttackResult State::attack_slot(const std::string& slot, int dx, int dy) {
     Player* actor = actor_for_slot(slot);
     if (!actor) return {};
-    if (slot == "player" && god_mode) return {};
 
     auto result = attack_actor(*actor, dx, dy);
     if (result.success) process_enemy_turns();
@@ -646,7 +734,6 @@ AttackResult State::attack_slot(const std::string& slot, int dx, int dy) {
 UseItemResult State::use_item_slot(const std::string& slot, const std::string& item_id) {
     Player* actor = actor_for_slot(slot);
     if (!actor) return {};
-    if (slot == "player" && god_mode) return {};
 
     auto result = use_item_actor(*actor, item_id);
     if (result.success) process_enemy_turns();
@@ -675,6 +762,11 @@ void State::process_enemy_turns() {
 
         if (!is_enemy_active(enemy)) continue;
 
+        if (enemy.type == EnemyType::Rat) {
+            process_rat_turn(idx);
+            continue;
+        }
+
         int best_dist_sq = 999999;
         int target_x = player.x;
         int target_y = player.y;
@@ -690,7 +782,7 @@ void State::process_enemy_turns() {
                 target_y = y;
             }
         };
-        consider(player.x, player.y, god_mode ? 0 : player.hp);
+        consider(player.x, player.y, player.hp);
         consider(rival.x, rival.y, rival.hp);
 
         const int dx = target_x - enemy.x;
@@ -775,7 +867,7 @@ AttackResult State::enemy_attack(int enemy_index, int dx, int dy) {
         return result;
     }
 
-    if (target_x == player.x && target_y == player.y && player.hp > 0 && !god_mode) {
+    if (target_x == player.x && target_y == player.y && player.hp > 0) {
         hit_player(player, player_ticks_since_death);
         return result;
     }
@@ -844,7 +936,7 @@ json State::get_full_map_cells() const {
 }
 
 json State::get_visible_cells(int radius, const std::string& slot) const {
-    if (god_mode && slot == "player") {
+    if (god_mode && slot == "spectator") {
         return get_full_map_cells();
     }
     const Player* actor = actor_for_slot(slot);
@@ -1250,23 +1342,13 @@ std::vector<std::string> State::get_available_actions(const std::string& slot) c
     auto append_query_tools = [&]() {
         actions.push_back("get_game_state");
         actions.push_back("get_available_actions");
-        if (slot == "rival") {
-            actions.push_back("scout_around");
-        } else {
-            actions.push_back("get_visible_cells");
-        }
+        actions.push_back("scout_around");
     };
 
     const Player* actor = actor_for_slot(slot);
     if (!actor) return actions;
 
     if (state != GameState::Running) return actions;
-
-    if (slot == "player" && god_mode) {
-        actions.push_back("move");
-        append_query_tools();
-        return actions;
-    }
 
     if (actor->hp <= 0) {
         append_query_tools();
@@ -1366,6 +1448,7 @@ void to_json(json& j, const State& state) {
         {"max_enemies_on_level", state.max_enemies_on_level},
         {"level_winner", state.level_winner},
         {"god_mode", state.god_mode},
+        {"spectator", state.spectator},
         {"steps", state.steps},
         {"map_loot", state.dropped_loot},
         {"rival_room_index", state.room_index_at(state.rival.x, state.rival.y)},

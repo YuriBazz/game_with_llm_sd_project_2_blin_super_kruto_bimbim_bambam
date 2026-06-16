@@ -19,6 +19,15 @@ class GameServiceClient {
 private:
     std::string host_;
     int port_;
+    std::string agent_slot_;
+
+    static std::string agent_slot_from_env() {
+        const char* slot = std::getenv("AGENT_SLOT");
+        if (slot && (std::string(slot) == "player" || std::string(slot) == "rival")) {
+            return slot;
+        }
+        return "rival";
+    }
     
     std::string make_request(const std::string& method, const std::string& path, 
                             const std::string& body = "", bool is_json = false) {
@@ -32,6 +41,13 @@ private:
         
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "X-Controlled-By: agent");
+        if (is_json) {
+            headers = curl_slist_append(headers, "Content-Type: application/json");
+        }
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         
         if (method == "POST") {
             curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -40,16 +56,11 @@ private:
             }
         }
         
-        if (is_json) {
-            struct curl_slist* headers = nullptr;
-            headers = curl_slist_append(headers, "Content-Type: application/json");
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        }
-        
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
         
         CURLcode res = curl_easy_perform(curl);
+        curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
         
         if (res != CURLE_OK) {
@@ -59,12 +70,11 @@ private:
     }
     
 public:
-    GameServiceClient(const std::string& host = "localhost", int port = 8080) 
-        : host_(host), port_(port) {
-        // Allow override via environment variables
+    GameServiceClient(const std::string& host = "localhost", int port = 8080)
+        : host_(host), port_(port), agent_slot_(agent_slot_from_env()) {
         const char* env_host = std::getenv("GAME_SERVICE_HOST");
         const char* env_port = std::getenv("GAME_SERVICE_PORT");
-        
+
         if (env_host) host_ = env_host;
         if (env_port) port_ = std::stoi(env_port);
     }
@@ -81,10 +91,8 @@ public:
         }
     }
     
-    static constexpr const char* kAgentSlot = "rival";
-
     json move(const std::string& direction) {
-        json body = {{"direction", direction}, {"slot", kAgentSlot}};
+        json body = {{"direction", direction}, {"slot", agent_slot_}};
         std::string response = make_request("POST", "/api/move", body.dump(), true);
         if (response.empty()) {
             return {{"success", false}, {"error", "Failed to move"}};
@@ -97,7 +105,7 @@ public:
     }
     
     json attack(int target_x, int target_y) {
-        json body = {{"target_x", target_x}, {"target_y", target_y}, {"slot", kAgentSlot}};
+        json body = {{"target_x", target_x}, {"target_y", target_y}, {"slot", agent_slot_}};
         std::string response = make_request("POST", "/api/attack", body.dump(), true);
         if (response.empty()) {
             return {{"success", false}, {"error", "Failed to attack"}};
@@ -111,7 +119,7 @@ public:
     
     json get_visible_cells(int radius = 5) {
         std::string path = "/api/visible_cells?radius=" + std::to_string(radius) +
-                           "&slot=" + kAgentSlot;
+                           "&slot=" + agent_slot_;
         std::string response = make_request("GET", path);
         if (response.empty()) {
             return {{"success", false}, {"error", "Failed to get visible cells"}};
@@ -124,7 +132,7 @@ public:
     }
     
     json use_item(const std::string& item_id) {
-        json body = {{"item_id", item_id}, {"slot", kAgentSlot}};
+        json body = {{"item_id", item_id}, {"slot", agent_slot_}};
         std::string response = make_request("POST", "/api/use_item", body.dump(), true);
         if (response.empty()) {
             return {{"success", false}, {"error", "Failed to use item"}};
@@ -137,7 +145,7 @@ public:
     }
     
     json scout_around(const json& args = json::object()) {
-        std::string path = std::string("/api/scout_around?slot=") + kAgentSlot;
+        std::string path = std::string("/api/scout_around?slot=") + agent_slot_;
         if (args.contains("entry_corridor") && args["entry_corridor"].is_number_integer()) {
             path += "&entry_corridor=" + std::to_string(args["entry_corridor"].get<int>());
         }
@@ -164,7 +172,7 @@ public:
     }
 
     json get_available_actions() {
-        std::string response = make_request("GET", "/api/available_actions?slot=rival");
+        std::string response = make_request("GET", "/api/available_actions?slot=" + agent_slot_);
         if (response.empty()) {
             return {{"success", false}, {"error", "Failed to get available actions"}};
         }
@@ -296,6 +304,19 @@ int main() {
                 return validation_error("Missing or invalid required argument: item_id");
             }
             return client.use_item(item_id);
+        });
+
+    server.register_tool("pickup_item",
+        "Pick up loot on current tile (loot is also auto-collected when moving onto it)",
+        {{"type", "object"}, {"properties", json::object()}},
+        [&client](const json&) -> json {
+            json state = client.get_state();
+            if (state.contains("error")) return state;
+            return {
+                {"success", true},
+                {"message", "Loot is collected automatically when you move onto its tile. Use move to step on loot."},
+                {"state", state}
+            };
         });
 
     server.register_tool("get_available_actions",

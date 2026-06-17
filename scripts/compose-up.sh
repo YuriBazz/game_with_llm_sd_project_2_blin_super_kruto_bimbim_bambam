@@ -130,7 +130,7 @@ append_compose_profiles() {
 run_up() {
   local -a cmd=(docker compose)
   append_compose_profiles cmd
-  cmd+=(up)
+  cmd+=(up -d --remove-orphans)
   if ((${#compose_args[@]} > 0)); then
     cmd+=("${compose_args[@]}")
   fi
@@ -148,7 +148,13 @@ run_up() {
     "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"
     return "${PIPESTATUS[0]}"
   fi
-  exec "${cmd[@]}"
+  "${cmd[@]}"
+  echo ""
+  echo "Stack is up (detached). Web UI: http://localhost:5173"
+  local -a ps_cmd=(docker compose)
+  append_compose_profiles ps_cmd
+  ps_cmd+=(ps)
+  "${ps_cmd[@]}"
 }
 
 if [[ "$NO_BUILD" == true ]]; then

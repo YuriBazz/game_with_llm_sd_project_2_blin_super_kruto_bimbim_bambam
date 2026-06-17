@@ -84,27 +84,9 @@ robot_llm_provider_for_label() {
 }
 
 maybe_enable_ollama() {
-  local provider_a provider_h
-  provider_a="$(robot_llm_provider_for_label A)"
-  provider_h="$(robot_llm_provider_for_label H)"
-
-  if [[ "$provider_a" == "ollama" || "$provider_h" == "ollama" ]]; then
-    compose_profiles+=("ollama")
-    echo "  ollama: enabled"
-    if [[ "$provider_a" == "ollama" ]]; then
-      echo "    robot A: pull ${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-(unset)}}"
-    else
-      echo "    robot A: skip (provider=${provider_a})"
-    fi
-    if [[ "$provider_h" == "ollama" ]]; then
-      echo "    robot H: pull ${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-(unset)}}"
-    else
-      echo "    robot H: skip (provider=${provider_h})"
-    fi
-    return 0
-  fi
-
-  echo "  ollama: skipped (no robot uses ollama)"
+  compose_profiles+=("ollama")
+  echo "  ollama-a: robot A → ${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-unset}} (:11434)"
+  echo "  ollama-h: robot H → ${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-unset}} (:11435)"
 }
 
 maybe_enable_cursor_bridge() {
@@ -188,8 +170,8 @@ fi
 
 echo "=== Starting full stack ==="
 echo "  game-service :8080, web-client :5173, agent-runner-player, agent-runner-rival"
-echo "  Robot A: $(robot_llm_provider_for_label A) model=${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-}}"
-echo "  Robot H: $(robot_llm_provider_for_label H) model=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}}"
+echo "  Robot A: $(robot_llm_provider_for_label A) model=${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-}} url=${ROBOT_A_OLLAMA_URL:-http://ollama-a:11434}"
+echo "  Robot H: $(robot_llm_provider_for_label H) model=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}} url=${ROBOT_H_OLLAMA_URL:-http://ollama-h:11434}"
 if [[ -e /dev/dri/renderD128 ]]; then
   echo "  GPU: AMD (/dev/dri) — Ollama uses Vulkan"
 elif command -v nvidia-smi >/dev/null 2>&1; then

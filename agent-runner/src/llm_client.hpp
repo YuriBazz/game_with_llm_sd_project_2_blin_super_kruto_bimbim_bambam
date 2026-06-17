@@ -1578,19 +1578,27 @@ public:
         const char* provider = agent::robot_env_or_fallback(slot, "LLM_PROVIDER");
         const std::string provider_name = provider ? provider : "mock";
 
-        const char* ollama_url = std::getenv("OLLAMA_URL");
         const char* model = agent::robot_env_or_fallback(slot, "MODEL");
         const char* cursor_bridge = agent::robot_env_or_fallback(slot, "CURSOR_BRIDGE_URL");
         const std::string& label = agent::robot_meta(slot).label;
         const std::string default_bridge = (label == "H")
             ? "http://cursor-llm-bridge-h:8765"
             : "http://cursor-llm-bridge-a:8765";
+        const std::string default_ollama_url = (label == "H")
+            ? "http://ollama-h:11434"
+            : "http://ollama-a:11434";
         const std::string cursor_bridge_url =
             provider_name == "cursor" ? (cursor_bridge ? cursor_bridge : default_bridge) : "";
         const std::string llm_model = model ? model : "";
 
-        const char* openai_key = std::getenv("OPENAI_API_KEY");
+        const char* ollama_url = agent::robot_env_or_fallback(slot, "OLLAMA_URL");
+        if (ollama_url == nullptr || ollama_url[0] == '\0') {
+            ollama_url = std::getenv("OLLAMA_URL");
+        }
+        const std::string resolved_ollama_url =
+            (ollama_url != nullptr && ollama_url[0] != '\0') ? ollama_url : default_ollama_url;
 
+        const char* openai_key = std::getenv("OPENAI_API_KEY");
         const char* temperature = std::getenv("TEMPERATURE");
         const char* max_tokens = std::getenv("MAX_TOKENS");
 
@@ -1605,7 +1613,7 @@ public:
 
         auto client = std::make_unique<LLMClient>(
             provider_name,
-            ollama_url ? ollama_url : "http://ollama:11434",
+            resolved_ollama_url,
             llm_model,
             openai_key ? openai_key : "",
             cursor_bridge_url,

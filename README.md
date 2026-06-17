@@ -100,7 +100,9 @@ flowchart TB
 | `ROBOT_H_MODEL_FALLBACK` | — | Fallback модели H |
 | `ROBOT_H_CURSOR_BRIDGE_URL` | `http://cursor-llm-bridge-h:8765` | URL bridge внутри compose |
 | `CURSOR_API_KEY` | — | Общий ключ Cursor API (нужен, если хотя бы один робот с `LLM_PROVIDER=cursor`) |
-| `OLLAMA_URL` | `http://ollama:11434` | Endpoint Ollama (в compose) |
+| `ROBOT_A_OLLAMA_URL` | `http://ollama-a:11434` | Ollama для робота A |
+| `ROBOT_H_OLLAMA_URL` | `http://ollama-h:11434` | Ollama для робота H |
+| `OLLAMA_URL` | — | Legacy fallback только для A |
 | `OLLAMA_NUM_GPU` | — | `0` = CPU-only при проблемах с GPU |
 | `OPENAI_API_KEY` | — | Ключ OpenAI (если провайдер `openai`) |
 | `MAX_STEPS` | `500` | Лимит шагов agent-runner за раунд |
@@ -139,7 +141,7 @@ ROBOT_H_LLM_PROVIDER=cursor CURSOR_API_KEY=... ./scripts/compose-up.sh
 ROBOT_A_LLM_PROVIDER=cursor ROBOT_H_LLM_PROVIDER=cursor CURSOR_API_KEY=... ./scripts/compose-up.sh
 ```
 
-Bridge стартует **только** для роботов с `ROBOT_*_LLM_PROVIDER=cursor` и при непустом `CURSOR_API_KEY`. Ollama стартует **только** если хотя бы один робот с `ROBOT_*_LLM_PROVIDER=ollama`; pull делается только для таких роботов.
+Bridge стартует **только** для роботов с `ROBOT_*_LLM_PROVIDER=cursor` и при непустом `CURSOR_API_KEY`. Два контейнера Ollama (`ollama-a`, `ollama-h`) стартуют всегда. `ollama-a` качает `ROBOT_A_MODEL`, `ollama-h` — `ROBOT_H_MODEL`. A ходит в `ollama-a`, H — в `ollama-h` (или меняешь `ROBOT_*_OLLAMA_URL`).
 
 Для каждого `ROBOT_{A|H}_*` есть парный `ROBOT_{A|H}_*_FALLBACK` — используется, если основная переменная не задана. Пример `.env`:
 

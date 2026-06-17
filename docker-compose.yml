@@ -41,7 +41,7 @@ services:
       - MCP_SERVER_PATH=/usr/local/bin/mcp_server
       - GAME_SERVICE_HOST=game-service
       - GAME_SERVICE_PORT=8080
-      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - ROBOT_A_OLLAMA_URL=${ROBOT_A_OLLAMA_URL:-${OLLAMA_URL:-http://ollama-a:11434}}
       - ROBOT_A_MODEL=${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-}}
       - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -71,7 +71,7 @@ services:
       - MCP_SERVER_PATH=/usr/local/bin/mcp_server
       - GAME_SERVICE_HOST=game-service
       - GAME_SERVICE_PORT=8080
-      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - ROBOT_H_OLLAMA_URL=${ROBOT_H_OLLAMA_URL:-http://ollama-h:11434}
       - ROBOT_H_MODEL=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}}
       - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -142,7 +142,7 @@ services:
       - game-net
     restart: "no"
 
-  ollama:
+  ollama-a:
     profiles:
       - ollama
     image: ollama/ollama:latest
@@ -150,23 +150,51 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ollama_data:/root/.ollama
-      - ./scripts/ollama-entrypoint.sh:/ollama-entrypoint.sh:ro
+      - ollama_a_data:/root/.ollama
+      - ./scripts/ollama-serve.sh:/ollama-entrypoint.sh:ro
     devices:
       - /dev/dxg:/dev/dxg
     group_add:
       - ${RENDER_GID:-989}
       - ${VIDEO_GID:-985}
     environment:
-      - ROBOT_A_LLM_PROVIDER=${ROBOT_A_LLM_PROVIDER:-${ROBOT_A_LLM_PROVIDER_FALLBACK:-ollama}}
-      - ROBOT_H_LLM_PROVIDER=${ROBOT_H_LLM_PROVIDER:-${ROBOT_H_LLM_PROVIDER_FALLBACK:-ollama}}
-      - ROBOT_A_MODEL=${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-}}
-      - ROBOT_H_MODEL=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}}
+      - OLLAMA_PULL_MODEL=${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-}}
       - OLLAMA_KEEP_ALIVE=-1
       - OLLAMA_VULKAN=${OLLAMA_VULKAN:-1}
       - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-1}
       - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-0}
-      # AMD Renoir/Lucienne iGPU (gfx1030) — drop if you have NVIDIA + nvidia-container-toolkit
+      - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
+    entrypoint: ["/bin/sh", "/ollama-entrypoint.sh"]
+    healthcheck:
+      test: ["CMD", "ollama", "ps"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    networks:
+      - game-net
+
+  ollama-h:
+    profiles:
+      - ollama
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama_h_data:/root/.ollama
+      - ./scripts/ollama-serve.sh:/ollama-entrypoint.sh:ro
+    devices:
+      - /dev/dxg:/dev/dxg
+    group_add:
+      - ${RENDER_GID:-989}
+      - ${VIDEO_GID:-985}
+    environment:
+      - OLLAMA_PULL_MODEL=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}}
+      - OLLAMA_KEEP_ALIVE=-1
+      - OLLAMA_VULKAN=${OLLAMA_VULKAN:-1}
+      - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-1}
+      - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-0}
       - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
     entrypoint: ["/bin/sh", "/ollama-entrypoint.sh"]
     healthcheck:
@@ -183,5 +211,6 @@ networks:
     driver: bridge
 
 volumes:
-  ollama_data:
+  ollama_a_data:
+  ollama_h_data:
   agent_logs:

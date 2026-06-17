@@ -1,0 +1,586 @@
+import { GameClient } from './api/gameClient';
+import { GameStore } from './state/gameStore';
+import { MapRenderer } from './render/mapRenderer';
+import { GameLog, HUD, type AgentPanelData } from './ui/hud';
+import { isVictory, isDefeat, isLevelComplete, isPlayable, type GameState } from './types/game';
+
+let client: GameClient;
+let store: GameStore;
+let renderer: MapRenderer;
+let gameLog: GameLog;
+let hud: HUD;
+
+let isInputLocked = false;
+let gameInitialized = false;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+function isSpectatorMode(state: GameState | null): boolean {
+    return state?.god_mode === true;
+}
+
+function hideStartScreen(): void {
+    const el = document.getElementById('startOverlay');
+    if (el) el.style.display = 'none';
+}
+
+async function syncVisibleCells(state: GameState): Promise<void> {
+    if (state.god_mode) return;
+    const visibleCells = await client.getVisibleCells(8);
+    store.updateVisibleCells(visibleCells);
+}
+
+function showStartScreen(): void {
+    const el = document.getElementById('startOverlay');
+    if (el) el.style.display = 'flex';
+}
+
+async function refreshState(): Promise<void> {
+    if (!gameInitialized) return;
+    const state = await client.tick();
+    store.updateState(state);
+    render();
+    updateSpectatorBanner();
+}
+
+function startPolling(): void {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+        if (!gameInitialized || !store.state) return;
+        if (isVictory(store.state) || isDefeat(store.state) || isLevelComplete(store.state)) return;
+        try {
+            await refreshState();
+        } catch {
+        }
+    }, 400);
+}
+
+function buildAgentPanel(
+    marker: 'H' | 'A',
+    actor: { x: number; y: number; hp: number; max_hp: number; gold: number; inventory: AgentPanelData['inventory']; respawns_remaining?: number },
+    kills: number,
+    killsRequired: number,
+    color: string,
+    label: string
+): AgentPanelData {
+    return {
+        marker,
+        label,
+        color,
+        x: actor.x,
+        y: actor.y,
+        hp: actor.hp,
+        maxHp: actor.max_hp,
+        kills,
+        killsRequired,
+        respawns: actor.respawns_remaining ?? 0,
+        gold: actor.gold,
+        inventory: actor.inventory ?? [],
+    };
+}
+
+function resizeCanvasToContainer(): void {
+    const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement | null;
+    if (!canvas || !renderer) return;
+
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width < 64 || rect.height < 64) {
+        window.requestAnimationFrame(resizeCanvasToContainer);
+        return;
+    }
+
+    const width = Math.floor(rect.width);
+    const height = Math.floor(rect.height);
+    renderer.setSize(width, height);
+    if (gameInitialized) {
+        render();
+    }
+}
+
+async function moveSpectator(direction: 'up' | 'down' | 'left' | 'right'): Promise<void> {
+    if (isInputLocked || !gameInitialized || !store.state) return;
+    if (!isSpectatorMode(store.state)) return;
+
+    try {
+        isInputLocked = true;
+        const response = await client.spectatorMove(direction);
+        if (response.state) {
+            store.updateState(response.state);
+        }
+        const pos = store.state?.spectator;
+        if (pos) {
+            gameLog.add(`Observer O → (${pos.x}, ${pos.y}) [${direction}]`);
+        }
+        render();
+    } catch (error) {
+        console.error('Spectator move failed:', error);
+        gameLog.add(`Spectator move failed: ${error instanceof Error ? error.message : 'Error'}`);
+    } finally {
+        isInputLocked = false;
+    }
+}
+
+async function startGame(mode: 'start' | 'reset' | 'next_level' = 'start'): Promise<void> {
+    try {
+        isInputLocked = true;
+        hideStartScreen();
+        hideLevelCompleteOverlay();
+
+        await client.health();
+        const state = await client.newGame({ mode });
+        store.updateState(state);
+
+        const map = await client.getMap();
+        store.updateMap(map);
+
+        if (!state.god_mode) {
+            const visibleCells = await client.getVisibleCells(8);
+            store.updateVisibleCells(visibleCells);
+        }
+
+        gameInitialized = true;
+        isInputLocked = false;
+        gameLog.clear();
+
+        if (state.god_mode) {
+            gameLog.add('Spectator mode — you are O. Robots H & A fight via LLM.');
+            gameLog.add('WASD/Arrows move observer O (noclip, full map). H and A are independent robots.');
+            renderer.setFreeCamera(false, state.player.x, state.player.y);
+        } else if (mode === 'next_level') {
+            gameLog.add(`Level ${state.campaign_level ?? 1} started! Kill ${state.kills_required ?? 4} monsters.`);
+            renderer.setFreeCamera(false);
+        } else {
+            gameLog.add('Game started! You are H — agent is A. Race to kill quota.');
+            renderer.setFreeCamera(false);
+        }
+
+        resizeCanvasToContainer();
+        startPolling();
+        render();
+        updateSpectatorBanner();
+        updateControlsInfo();
+    } catch (error) {
+        console.error('Failed to initialize game:', error);
+        gameLog.add(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        if (!gameInitialized) showStartScreen();
+        isInputLocked = false;
+    }
+}
+
+function hideLevelCompleteOverlay(): void {
+    const el = document.getElementById('levelCompleteOverlay');
+    if (el) el.style.display = 'none';
+}
+
+function showLevelCompleteOverlay(): void {
+    const el = document.getElementById('levelCompleteOverlay');
+    if (el) el.style.display = 'flex';
+}
+
+async function movePlayer(direction: 'up' | 'down' | 'left' | 'right'): Promise<void> {
+    if (isInputLocked || !gameInitialized) return;
+    if (!store.state || !isPlayable(store.state)) return;
+
+    try {
+        isInputLocked = true;
+        const response = await client.move(direction);
+
+        if (response.state) {
+            store.updateState(response.state);
+            await syncVisibleCells(response.state);
+
+            if (response.success) {
+                const label = store.state.god_mode ? 'H' : 'You';
+                gameLog.add(`${label} moved ${direction} to (${response.x}, ${response.y})`);
+            }
+        }
+
+        render();
+    } catch (error) {
+        console.error('Move failed:', error);
+        gameLog.add(`Move failed: ${error instanceof Error ? error.message : 'Error'}`);
+    } finally {
+        isInputLocked = false;
+    }
+}
+
+async function attackTarget(x: number, y: number): Promise<void> {
+    if (isInputLocked || !gameInitialized) return;
+    if (!store.state || !isPlayable(store.state)) return;
+
+    const { player } = store.state;
+    const dist = Math.abs(x - player.x) + Math.abs(y - player.y);
+    if (dist !== 1) {
+        gameLog.add('Target must be adjacent to attack');
+        return;
+    }
+
+    try {
+        isInputLocked = true;
+        const response = await client.attack(x, y);
+
+        if (response.state) {
+            store.updateState(response.state);
+            await syncVisibleCells(response.state);
+
+            if (response.success) {
+                gameLog.add(
+                    `Attacked (${x}, ${y}) for ${response.damage} dmg${response.target_dead ? ' — KILL!' : ''}`
+                );
+            } else {
+                gameLog.add('Attack failed — nothing to hit there');
+            }
+        }
+
+        render();
+    } catch (error) {
+        console.error('Attack failed:', error);
+        gameLog.add(`Attack failed: ${error instanceof Error ? error.message : 'Error'}`);
+    } finally {
+        isInputLocked = false;
+    }
+}
+
+async function attackNearestTarget(): Promise<void> {
+    if (!store.state) return;
+    const { player, enemies } = store.state;
+    for (const enemy of enemies) {
+        if (Math.abs(enemy.x - player.x) + Math.abs(enemy.y - player.y) === 1) {
+            await attackTarget(enemy.x, enemy.y);
+            return;
+        }
+    }
+    gameLog.add('No adjacent target to attack');
+}
+
+async function pickupItem(): Promise<void> {
+    if (isInputLocked || !gameInitialized) return;
+    if (!store.state || !isPlayable(store.state)) return;
+
+    try {
+        isInputLocked = true;
+        const response = await client.pickupItem();
+        if (response.state) {
+            store.updateState(response.state);
+            await syncVisibleCells(response.state);
+            if (response.success) {
+                gameLog.add('Picked up item');
+            } else {
+                gameLog.add('Nothing to pickup here');
+            }
+        }
+        render();
+    } catch (error) {
+        console.error('Pickup failed:', error);
+        gameLog.add(`Pickup failed: ${error instanceof Error ? error.message : 'Error'}`);
+    } finally {
+        isInputLocked = false;
+    }
+}
+
+async function useItem(itemId: string): Promise<void> {
+    if (isInputLocked || !gameInitialized) return;
+    if (!store.state || !isPlayable(store.state)) return;
+
+    try {
+        isInputLocked = true;
+        const response = await client.useItem(itemId);
+
+        if (response.state) {
+            store.updateState(response.state);
+
+            if (response.success) {
+                gameLog.add(`Used item: ${response.effect} +${response.value}`);
+            } else {
+                gameLog.add('Cannot use item');
+            }
+        }
+
+        render();
+    } catch (error) {
+        console.error('Use item failed:', error);
+        gameLog.add(`Item use failed: ${error instanceof Error ? error.message : 'Error'}`);
+    } finally {
+        isInputLocked = false;
+    }
+}
+
+function updateSpectatorBanner(): void {
+    const banner = document.getElementById('godModeBanner');
+    if (!banner) return;
+    if (store.state?.god_mode) {
+        banner.style.display = 'inline-block';
+        banner.textContent = 'SPECTATOR — you are O';
+    } else {
+        banner.style.display = 'none';
+    }
+}
+
+function updateControlsInfo(): void {
+    const info = document.getElementById('info');
+    if (!info) return;
+    if (isSpectatorMode(store.state)) {
+        info.innerHTML = `
+            <div><span>WASD</span> / Arrows — Move observer O (noclip)</div>
+            <div><span>H</span> — Robot LLM &nbsp;|&nbsp; <span>A</span> — Robot LLM</div>
+            <div>You observe only. H and A play against each other.</div>
+            <div style="border-top: 1px solid #505060; margin-top: 8px; padding-top: 8px;">
+                Purple O = you. Blue H / green A = neural networks.
+            </div>
+        `;
+    }
+}
+
+function updateLevelCompleteOverlay(state: GameState): void {
+    const msg = document.getElementById('levelCompleteMessage');
+    if (!msg) return;
+
+    if (state.level_winner === 'human') {
+        msg.textContent = 'Level complete! Robot H reached kill quota first.';
+    } else if (state.level_winner === 'ai') {
+        msg.textContent = 'Level complete! Robot A reached kill quota first.';
+    } else {
+        msg.textContent = 'Level complete!';
+    }
+}
+
+function render(): void {
+    if (!store.state || !store.map) return;
+
+    const { player, rival, spectator } = store.state;
+    const killsRequired = store.state.kills_required ?? 4;
+    const meta = {
+        steps: store.state.steps,
+        level: store.state.campaign_level ?? 1,
+    };
+
+    renderer.render(store);
+
+    if (isSpectatorMode(store.state) && rival) {
+        hud.renderSpectator(
+            { x: spectator?.x ?? 0, y: spectator?.y ?? 0 },
+            buildAgentPanel(
+                'H',
+                player,
+                store.state.player_kills ?? 0,
+                killsRequired,
+                '#4da6ff',
+                'Robot H (LLM)'
+            ),
+            buildAgentPanel(
+                'A',
+                rival,
+                store.state.rival_kills ?? 0,
+                killsRequired,
+                '#00dd88',
+                'Robot A (LLM)'
+            ),
+            meta
+        );
+    } else if (rival) {
+        hud.renderDualAgents(
+            null,
+            buildAgentPanel(
+                'H',
+                player,
+                store.state.player_kills ?? 0,
+                killsRequired,
+                '#4da6ff',
+                'Robot H'
+            ),
+            buildAgentPanel(
+                'A',
+                rival,
+                store.state.rival_kills ?? 0,
+                killsRequired,
+                '#00dd88',
+                'Robot A'
+            ),
+            meta
+        );
+    } else {
+        hud.render(
+            player.hp,
+            player.max_hp,
+            player.gold,
+            '',
+            store.state.steps,
+            player.inventory,
+            {
+                level: store.state.campaign_level ?? 1,
+                playerKills: store.state.player_kills ?? 0,
+                rivalKills: store.state.rival_kills ?? 0,
+                killsRequired: store.state.kills_required ?? 4,
+            },
+            { respawns: player.respawns_remaining ?? 0, x: player.x, y: player.y },
+            undefined
+        );
+    }
+
+    const overlay = document.getElementById('overlay');
+    if (overlay) {
+        overlay.style.display = 'none';
+
+        if (isLevelComplete(store.state)) {
+            updateLevelCompleteOverlay(store.state);
+            showLevelCompleteOverlay();
+        } else if (isVictory(store.state) || isDefeat(store.state)) {
+            overlay.style.display = 'flex';
+            const message = overlay.querySelector('.message');
+            if (message) {
+                if (isVictory(store.state)) {
+                    message.textContent = `VICTORY! Steps: ${store.state.steps}`;
+                    overlay.style.backgroundColor = 'rgba(0, 200, 0, 0.8)';
+                } else if (isDefeat(store.state)) {
+                    message.textContent = `GAME OVER! Steps: ${store.state.steps}`;
+                    overlay.style.backgroundColor = 'rgba(200, 0, 0, 0.8)';
+                }
+            }
+        } else {
+            hideLevelCompleteOverlay();
+        }
+    }
+
+    gameLog.render(document.getElementById('log') || document.body);
+    updateSpectatorBanner();
+}
+
+function setupEventListeners(): void {
+    document.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.repeat) return;
+
+        switch (e.code) {
+            case 'KeyW':
+            case 'ArrowUp':
+                e.preventDefault();
+                if (isSpectatorMode(store.state)) moveSpectator('up');
+                else movePlayer('up');
+                break;
+            case 'KeyS':
+            case 'ArrowDown':
+                e.preventDefault();
+                if (isSpectatorMode(store.state)) moveSpectator('down');
+                else movePlayer('down');
+                break;
+            case 'KeyA':
+            case 'ArrowLeft':
+                e.preventDefault();
+                if (isSpectatorMode(store.state)) moveSpectator('left');
+                else movePlayer('left');
+                break;
+            case 'KeyD':
+            case 'ArrowRight':
+                e.preventDefault();
+                if (isSpectatorMode(store.state)) moveSpectator('right');
+                else movePlayer('right');
+                break;
+            case 'Space':
+                if (store.state?.god_mode) break;
+                e.preventDefault();
+                attackNearestTarget();
+                break;
+            case 'KeyG':
+                e.preventDefault();
+                pickupItem();
+                break;
+            default:
+                break;
+        }
+    });
+
+    const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
+    if (canvas) {
+        canvas.addEventListener('click', (e: MouseEvent) => {
+            if (!gameInitialized || !store.state) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const screenX = e.clientX - rect.left;
+            const screenY = e.clientY - rect.top;
+
+            const { x: worldX, y: worldY } = renderer.getWorldCoordinates(screenX, screenY);
+            const { player } = store.state;
+
+            const dx = Math.abs(worldX - player.x);
+            const dy = Math.abs(worldY - player.y);
+
+            if (dx + dy !== 1) return;
+
+            const enemy = store.getEnemyAt(worldX, worldY);
+            if (enemy && !store.state.god_mode) {
+                attackTarget(worldX, worldY);
+                return;
+            }
+
+            if (store.state.god_mode || !store.isWall(worldX, worldY)) {
+                if (worldX > player.x) movePlayer('right');
+                else if (worldX < player.x) movePlayer('left');
+                else if (worldY > player.y) movePlayer('down');
+                else if (worldY < player.y) movePlayer('up');
+            }
+        });
+    }
+
+    const hudContainer = document.getElementById('hud');
+    if (hudContainer) {
+        hudContainer.addEventListener('click', (e: MouseEvent) => {
+            const target = e.target as HTMLElement;
+            if (target.dataset.itemId) {
+                useItem(target.dataset.itemId);
+            }
+        });
+    }
+
+    const startBtn = document.getElementById('startGameBtn');
+    if (startBtn) {
+        startBtn.addEventListener('click', () => startGame('start'));
+    }
+
+    const startHeaderBtn = document.getElementById('startGameHeaderBtn');
+    if (startHeaderBtn) {
+        startHeaderBtn.addEventListener('click', () => startGame('start'));
+    }
+
+    const newGameBtn = document.getElementById('newGameBtn');
+    if (newGameBtn) {
+        newGameBtn.addEventListener('click', () => startGame('reset'));
+    }
+
+    const levelNewGameBtn = document.getElementById('levelNewGameBtn');
+    if (levelNewGameBtn) {
+        levelNewGameBtn.addEventListener('click', () => startGame('reset'));
+    }
+
+    const nextLevelBtn = document.getElementById('nextLevelBtn');
+    if (nextLevelBtn) {
+        nextLevelBtn.addEventListener('click', () => startGame('next_level'));
+    }
+}
+
+async function bootstrap(): Promise<void> {
+    client = new GameClient('');
+    store = new GameStore();
+    renderer = new MapRenderer(document.getElementById('gameCanvas') as HTMLCanvasElement);
+    gameLog = new GameLog();
+    hud = new HUD(document.getElementById('hud') as HTMLElement);
+
+    setupEventListeners();
+
+    const container = document.getElementById('gameContainer');
+    if (container && typeof ResizeObserver !== 'undefined') {
+        const observer = new ResizeObserver(() => resizeCanvasToContainer());
+        observer.observe(container);
+    }
+    window.addEventListener('resize', resizeCanvasToContainer);
+    resizeCanvasToContainer();
+
+    try {
+        const health = await client.health();
+        if (health.god_mode) {
+            gameLog.add('Press Start Game to begin. Robots H & A wait for a new session.');
+        }
+        showStartScreen();
+    } catch {
+        showStartScreen();
+    }
+}
+
+bootstrap();

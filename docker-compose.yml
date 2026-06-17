@@ -1,0 +1,141 @@
+services:
+  game-service:
+    build: ./game-service
+    ports:
+      - "8080:8080"
+    environment:
+      - GODMODE=${GODMODE:-true}
+    networks:
+      - game-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  mcp-server:
+    build: ./mcp-server
+    depends_on:
+      game-service:
+        condition: service_healthy
+    environment:
+      - GAME_SERVICE_HOST=game-service
+      - GAME_SERVICE_PORT=8080
+    networks:
+      - game-net
+    stdin_open: true
+    tty: true
+
+  agent-runner-rival:
+    build:
+      context: .
+      dockerfile: agent-runner/Dockerfile
+    depends_on:
+      game-service:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      - AGENT_SLOT=rival
+      - AGENT_LABEL=A
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - MCP_SERVER_PATH=/usr/local/bin/mcp_server
+      - GAME_SERVICE_HOST=game-service
+      - GAME_SERVICE_PORT=8080
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - MAX_STEPS=${MAX_STEPS:-500}
+      - MAX_TOKENS=${MAX_TOKENS:-5000}
+      - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-50000}
+      - GAME_SEED=${GAME_SEED:-42}
+      - AGENT_LOG_PATH=/logs/agent-rival.log
+    volumes:
+      - agent_logs:/logs
+    networks:
+      - game-net
+
+  agent-runner-player:
+    build:
+      context: .
+      dockerfile: agent-runner/Dockerfile
+    depends_on:
+      game-service:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      - AGENT_SLOT=player
+      - AGENT_LABEL=H
+      - LLM_PROVIDER=${LLM_PROVIDER_PLAYER:-ollama}
+      - MCP_SERVER_PATH=/usr/local/bin/mcp_server
+      - GAME_SERVICE_HOST=game-service
+      - GAME_SERVICE_PORT=8080
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL_PLAYER:-qwen2.5:3b}
+      - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL_PLAYER:-gpt-4o-mini}
+      - MAX_STEPS=${MAX_STEPS:-500}
+      - MAX_TOKENS=${MAX_TOKENS:-5000}
+      - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-50000}
+      - GAME_SEED=${GAME_SEED:-42}
+      - AGENT_LOG_PATH=/logs/agent-player.log
+    volumes:
+      - agent_logs:/logs
+    networks:
+      - game-net
+
+  web-client:
+    build: ./web-client
+    ports:
+      - "5173:80"
+    depends_on:
+      game-service:
+        condition: service_healthy
+    networks:
+      - game-net
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    devices:
+      - /dev/dxg:/dev/dxg
+    group_add:
+      - ${RENDER_GID:-989}
+      - ${VIDEO_GID:-985}
+    environment:
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - OLLAMA_MODEL_PLAYER=${OLLAMA_MODEL_PLAYER:-llama3.2:1b}
+      - OLLAMA_KEEP_ALIVE=-1
+      - OLLAMA_VULKAN=${OLLAMA_VULKAN:-1}
+      - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-1}
+      - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-0}
+      # AMD Renoir/Lucienne iGPU (gfx1030) — drop if you have NVIDIA + nvidia-container-toolkit
+      - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
+    entrypoint: /bin/sh
+    command: -c "ollama serve & sleep 5 && ollama pull \"$$OLLAMA_MODEL\" && ollama pull \"$$OLLAMA_MODEL_PLAYER\" && tail -f /dev/null"
+    healthcheck:
+      test: ["CMD", "ollama", "ps"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    networks:
+      - game-net
+
+networks:
+  game-net:
+    driver: bridge
+
+volumes:
+  ollama_data:
+  agent_logs:

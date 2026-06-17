@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roguelike Browser Client</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        background: #1a1a2e;
+        color: #e0e0e0;
+        font-family: 'Courier New', 'JetBrains Mono', 'Fira Code', monospace;
+        overflow: hidden;
+        height: 100vh;
+      }
+
+      #app {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+
+      #header {
+        background: #16213e;
+        padding: 12px 16px;
+        border-bottom: 2px solid #e94560;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      #godModeBanner {
+        display: none;
+        background: #7b2cbf;
+        color: #fff;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+      }
+
+      #title {
+        font-size: 20px;
+        font-weight: bold;
+        color: #e94560;
+      }
+
+      #newGameBtn {
+        background: #e94560;
+        color: #1a1a2e;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+        font-family: inherit;
+        transition: background 0.2s;
+      }
+
+      #startGameHeaderBtn {
+        background: #7b2cbf;
+        color: #fff;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+        font-family: inherit;
+        transition: background 0.2s;
+      }
+
+      #startGameHeaderBtn:hover {
+        background: #9d4edd;
+      }
+
+      #newGameBtn:hover {
+        background: #ff6b7a;
+      }
+
+      #newGameBtn:active {
+        transform: scale(0.98);
+      }
+
+      #content {
+        display: flex;
+        flex: 1;
+        gap: 12px;
+        padding: 12px;
+      }
+
+      #gameContainer {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 480px;
+        min-width: 0;
+      }
+
+      #gameCanvas {
+        flex: 1;
+        width: 100%;
+        height: 100%;
+        min-height: 320px;
+        background: #0f0f1e;
+        border: 2px solid #505060;
+        cursor: crosshair;
+        image-rendering: pixelated;
+        display: block;
+      }
+
+      #sidebar {
+        width: 320px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      #hud {
+        background: #16213e;
+        padding: 12px;
+        border: 1px solid #505060;
+        border-radius: 4px;
+        font-size: 13px;
+        line-height: 1.6;
+        flex-shrink: 0;
+        max-height: 55vh;
+        overflow-y: auto;
+      }
+
+      #log {
+        background: #0f0f1e;
+        padding: 12px;
+        border: 1px solid #505060;
+        border-radius: 4px;
+        font-size: 11px;
+        line-height: 1.4;
+        flex: 1;
+        overflow-y: auto;
+      }
+
+      #overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(200, 0, 0, 0.8);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        z-index: 1000;
+      }
+
+      #startOverlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 15, 30, 0.95);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        z-index: 1100;
+        gap: 24px;
+      }
+
+      #startOverlay h1 {
+        color: #e94560;
+        font-size: 36px;
+      }
+
+      #startOverlay p {
+        color: #aaa;
+        max-width: 480px;
+        text-align: center;
+        line-height: 1.6;
+      }
+
+      #startGameBtn {
+        background: #e94560;
+        color: #fff;
+        border: none;
+        padding: 16px 48px;
+        font-size: 20px;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+
+      #startGameBtn:hover {
+        background: #ff6b7a;
+      }
+
+      #levelCompleteOverlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 120, 80, 0.92);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        z-index: 1200;
+        gap: 20px;
+      }
+
+      #levelCompleteOverlay h2 {
+        color: #fff;
+        font-size: 42px;
+      }
+
+      .level-actions {
+        display: flex;
+        gap: 16px;
+      }
+
+      .level-actions button {
+        background: #16213e;
+        color: #fff;
+        border: 2px solid #e94560;
+        padding: 12px 28px;
+        font-size: 16px;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+
+      .level-actions button:hover {
+        background: #e94560;
+        color: #fff;
+      }
+
+      .message {
+        font-size: 48px;
+        font-weight: bold;
+        color: #ffffff;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+        animation: pulse 1s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.7;
+        }
+      }
+
+      /* Scrollbar styling */
+      #log::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      #log::-webkit-scrollbar-track {
+        background: #1a1a2e;
+      }
+
+      #log::-webkit-scrollbar-thumb {
+        background: #505060;
+        border-radius: 3px;
+      }
+
+      #log::-webkit-scrollbar-thumb:hover {
+        background: #707080;
+      }
+
+      /* Controls info */
+      #info {
+        background: #16213e;
+        padding: 12px;
+        border: 1px solid #505060;
+        border-radius: 4px;
+        font-size: 11px;
+        line-height: 1.6;
+        flex-shrink: 0;
+      }
+
+      #info div {
+        margin-bottom: 4px;
+      }
+
+      #info span {
+        color: #ffcc00;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="header">
+        <span id="title">Roguelike Browser Client</span>
+        <span id="godModeBanner">SPECTATOR — you are O</span>
+        <button id="startGameHeaderBtn">Start Game</button>
+        <button id="newGameBtn">New Game</button>
+      </div>
+      <div id="content">
+        <div id="gameContainer">
+          <canvas id="gameCanvas"></canvas>
+        </div>
+        <div id="sidebar">
+          <div id="hud"></div>
+          <div id="info">
+            <div><span>WASD</span> / Arrows — Move spectator (O)</div>
+            <div><span>H</span> / <span>A</span> — LLM robots (not you)</div>
+            <div style="border-top: 1px solid #505060; margin-top: 8px; padding-top: 8px;">
+              Fog of war reveals the whole room you're in
+            </div>
+          </div>
+          <div id="log"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="startOverlay">
+      <h1>Roguelike</h1>
+      <p>
+        Spectator mode: you fly as <strong>O</strong> (purple).<br>
+        Robot <strong>H</strong> and robot <strong>A</strong> are two LLMs fighting each other.<br>
+        Press <strong>Start Game</strong> — agents join when the session starts.
+      </p>
+      <button id="startGameBtn">Start Game</button>
+    </div>
+
+    <div id="levelCompleteOverlay">
+      <h2>Level Complete!</h2>
+      <p id="levelCompleteMessage" style="color: #ddd; font-size: 18px;">First to kill quota wins.</p>
+      <div class="level-actions">
+        <button id="levelNewGameBtn">New Game</button>
+        <button id="nextLevelBtn">Next Level</button>
+      </div>
+    </div>
+
+    <div id="overlay">
+      <div class="message"></div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

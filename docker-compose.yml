@@ -152,25 +152,22 @@ services:
     volumes:
       - ollama_a_data:/root/.ollama
       - ./scripts/ollama-serve.sh:/ollama-entrypoint.sh:ro
-    devices:
-      - /dev/dxg:/dev/dxg
-    group_add:
-      - ${RENDER_GID:-989}
-      - ${VIDEO_GID:-985}
     environment:
-      - OLLAMA_PULL_MODEL=${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-}}
       - OLLAMA_KEEP_ALIVE=-1
-      - OLLAMA_VULKAN=${OLLAMA_VULKAN:-1}
-      - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-1}
+      - OLLAMA_VULKAN=${OLLAMA_VULKAN:-0}
+      - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-0}
       - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-0}
-      - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
+      - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-}
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     entrypoint: ["/bin/sh", "/ollama-entrypoint.sh"]
     healthcheck:
       test: ["CMD", "ollama", "ps"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 300s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     networks:
       - game-net
 
@@ -184,26 +181,23 @@ services:
     volumes:
       - ollama_h_data:/root/.ollama
       - ./scripts/ollama-serve.sh:/ollama-entrypoint.sh:ro
-    devices:
-      - /dev/dxg:/dev/dxg
-    group_add:
-      - ${RENDER_GID:-989}
-      - ${VIDEO_GID:-985}
     environment:
       - OLLAMA_HOST=0.0.0.0:11435
-      - OLLAMA_PULL_MODEL=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}}
       - OLLAMA_KEEP_ALIVE=-1
-      - OLLAMA_VULKAN=${OLLAMA_VULKAN:-1}
-      - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-1}
+      - OLLAMA_VULKAN=${OLLAMA_VULKAN:-0}
+      - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-0}
       - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-0}
-      - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
+      - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-}
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     entrypoint: ["/bin/sh", "/ollama-entrypoint.sh"]
     healthcheck:
-      test: ["CMD", "ollama", "ps"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 300s
+      test: ["CMD", "sh", "-c", "OLLAMA_HOST=127.0.0.1:11435 ollama ps"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     networks:
       - game-net
 

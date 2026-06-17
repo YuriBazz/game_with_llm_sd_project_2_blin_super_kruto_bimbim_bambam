@@ -53,7 +53,8 @@ cp .env.example .env   # отредактируй при необходимос�
 |--------|-----|
 | Web UI | http://localhost:5173 |
 | game-service | http://localhost:8080 |
-| Ollama | http://localhost:11434 |
+| Ollama A | http://localhost:11434 |
+| Ollama H | http://localhost:11435 |
 
 ### Ручной прогон MCP (MCP Inspector / stdio)
 
@@ -101,7 +102,7 @@ flowchart TB
 | `ROBOT_H_CURSOR_BRIDGE_URL` | `http://cursor-llm-bridge-h:8765` | URL bridge внутри compose |
 | `CURSOR_API_KEY` | — | Общий ключ Cursor API (нужен, если хотя бы один робот с `LLM_PROVIDER=cursor`) |
 | `ROBOT_A_OLLAMA_URL` | `http://ollama-a:11434` | Ollama для робота A |
-| `ROBOT_H_OLLAMA_URL` | `http://ollama-h:11434` | Ollama для робота H |
+| `ROBOT_H_OLLAMA_URL` | `http://ollama-h:11435` | Ollama для робота H |
 | `OLLAMA_URL` | — | Legacy fallback только для A |
 | `OLLAMA_NUM_GPU` | — | `0` = CPU-only при проблемах с GPU |
 | `OPENAI_API_KEY` | — | Ключ OpenAI (если провайдер `openai`) |

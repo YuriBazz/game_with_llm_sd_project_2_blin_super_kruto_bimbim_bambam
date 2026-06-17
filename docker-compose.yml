@@ -71,7 +71,7 @@ services:
       - MCP_SERVER_PATH=/usr/local/bin/mcp_server
       - GAME_SERVICE_HOST=game-service
       - GAME_SERVICE_PORT=8080
-      - ROBOT_H_OLLAMA_URL=${ROBOT_H_OLLAMA_URL:-http://ollama-h:11434}
+      - ROBOT_H_OLLAMA_URL=${ROBOT_H_OLLAMA_URL:-http://ollama-h:11435}
       - ROBOT_H_MODEL=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}}
       - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -180,7 +180,7 @@ services:
     image: ollama/ollama:latest
     restart: unless-stopped
     ports:
-      - "11435:11434"
+      - "11435:11435"
     volumes:
       - ollama_h_data:/root/.ollama
       - ./scripts/ollama-serve.sh:/ollama-entrypoint.sh:ro
@@ -190,6 +190,7 @@ services:
       - ${RENDER_GID:-989}
       - ${VIDEO_GID:-985}
     environment:
+      - OLLAMA_HOST=0.0.0.0:11435
       - OLLAMA_PULL_MODEL=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}}
       - OLLAMA_KEEP_ALIVE=-1
       - OLLAMA_VULKAN=${OLLAMA_VULKAN:-1}

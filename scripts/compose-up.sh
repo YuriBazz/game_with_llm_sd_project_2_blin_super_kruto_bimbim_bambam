@@ -171,7 +171,7 @@ fi
 echo "=== Starting full stack ==="
 echo "  game-service :8080, web-client :5173, agent-runner-player, agent-runner-rival"
 echo "  Robot A: $(robot_llm_provider_for_label A) model=${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-}} url=${ROBOT_A_OLLAMA_URL:-http://ollama-a:11434}"
-echo "  Robot H: $(robot_llm_provider_for_label H) model=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}} url=${ROBOT_H_OLLAMA_URL:-http://ollama-h:11434}"
+echo "  Robot H: $(robot_llm_provider_for_label H) model=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}} url=${ROBOT_H_OLLAMA_URL:-http://ollama-h:11435}"
 if [[ -e /dev/dri/renderD128 ]]; then
   echo "  GPU: AMD (/dev/dri) — Ollama uses Vulkan"
 elif command -v nvidia-smi >/dev/null 2>&1; then

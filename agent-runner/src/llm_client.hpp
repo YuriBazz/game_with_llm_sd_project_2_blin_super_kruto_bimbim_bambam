@@ -1585,7 +1585,7 @@ public:
             ? "http://cursor-llm-bridge-h:8765"
             : "http://cursor-llm-bridge-a:8765";
         const std::string default_ollama_url = (label == "H")
-            ? "http://ollama-h:11434"
+            ? "http://ollama-h:11435"
             : "http://ollama-a:11434";
         const std::string cursor_bridge_url =
             provider_name == "cursor" ? (cursor_bridge ? cursor_bridge : default_bridge) : "";

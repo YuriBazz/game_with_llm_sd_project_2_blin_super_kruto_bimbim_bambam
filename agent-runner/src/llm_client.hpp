@@ -29,9 +29,9 @@ class LLMClient {
 private:
     std::string provider_;
     std::string ollama_url_;
-    std::string ollama_model_;
+    std::string llm_model_;
     std::string openai_api_key_;
-    std::string openai_model_;
+    std::string cursor_bridge_url_;
     int max_retries_ = 3;
     int total_tokens_used_ = 0;
     int steps_counter_ = 0;
@@ -126,7 +126,7 @@ private:
         return response;
     }
 
-    static bool ollama_model_matches(const std::string& listed, const std::string& wanted) {
+    static bool llm_model_matches(const std::string& listed, const std::string& wanted) {
         if (listed == wanted) return true;
         if (listed.rfind(wanted + ":", 0) == 0) return true;
         const auto colon = listed.find(':');
@@ -143,7 +143,7 @@ private:
         try {
             const json tags = json::parse(*response);
             for (const auto& model : tags.value("models", json::array())) {
-                if (ollama_model_matches(model.value("name", ""), ollama_model_)) {
+                if (llm_model_matches(model.value("name", ""), llm_model_)) {
                     return true;
                 }
             }
@@ -152,8 +152,8 @@ private:
     }
 
     void request_ollama_pull() const {
-        std::cout << "Requesting Ollama pull for model: " << ollama_model_ << std::endl;
-        const json body = {{"name", ollama_model_}, {"stream", false}};
+        std::cout << "Requesting Ollama pull for model: " << llm_model_ << std::endl;
+        const json body = {{"name", llm_model_}, {"stream", false}};
         const auto response = http_post_json(
             ollama_url_ + "/api/pull",
             body,
@@ -161,7 +161,7 @@ private:
             600L
         );
         if (!response) {
-            std::cerr << "Ollama pull request failed for model " << ollama_model_ << std::endl;
+            std::cerr << "Ollama pull request failed for model " << llm_model_ << std::endl;
         }
     }
 
@@ -182,7 +182,7 @@ private:
     std::optional<std::string> ollama_chat(const json& messages, bool allow_cpu_fallback = true) {
         for (int pass = 0; pass < 2; ++pass) {
             const json body = {
-                {"model", ollama_model_},
+                {"model", llm_model_},
                 {"stream", false},
                 {"keep_alive", "24h"},
                 {"messages", messages},
@@ -198,7 +198,7 @@ private:
             if (!response) {
                 if (pass == 0 && allow_cpu_fallback && !ollama_force_cpu_ && ollama_num_gpu_ != 0) {
                     std::cerr << "Ollama GPU inference failed — retrying on CPU (num_gpu=0). "
-                              << "For AMD iGPU use OLLAMA_MODEL=qwen2.5:3b or OLLAMA_NUM_GPU=0."
+                              << "For AMD iGPU use ROBOT_*_MODEL=qwen2.5:3b or OLLAMA_NUM_GPU=0."
                               << std::endl;
                     ollama_force_cpu_ = true;
                     ollama_prompt_primed_ = false;
@@ -221,24 +221,37 @@ private:
         return std::nullopt;
     }
 
-    const char* system_prompt() const {
+    std::string system_prompt() const {
         return agent::system_prompt_for(agent_slot_);
     }
 
-    json remap_for_agent_logic(const json& state) const {
-        if (agent_slot_ != "player") return state;
-        json view = state;
-        if (state.contains("player")) view["rival"] = state["player"];
-        if (state.contains("rival")) view["player"] = state["rival"];
-        view["rival_kills"] = state.value("player_kills", 0);
-        view["player_kills"] = state.value("rival_kills", 0);
-        if (state.contains("player_room_index")) {
-            view["rival_room_index"] = state["player_room_index"];
-        }
-        if (state.contains("rival_room_index")) {
-            view["player_room_index"] = state["rival_room_index"];
-        }
-        return view;
+    std::string actor_state_key() const {
+        return agent::robot_meta(agent_slot_).slot;
+    }
+
+    std::string actor_room_map_key() const {
+        return agent::robot_meta(agent_slot_).room_map_key;
+    }
+
+    std::string actor_room_index_key() const {
+        return agent::robot_meta(agent_slot_).room_index_key;
+    }
+
+    bool has_actor(const json& state) const {
+        return state.contains(actor_state_key());
+    }
+
+    bool actor_in_room(const json& state) const {
+        const std::string key = actor_room_map_key();
+        return state.contains(key) && state[key].value("in_room", false);
+    }
+
+    bool actor_has_local_map_view(const json& state) const {
+        const std::string key = actor_room_map_key();
+        return state.contains(key) &&
+               state[key].contains("rows") &&
+               state[key]["rows"].is_array() &&
+               !state[key]["rows"].empty();
     }
 
     void prime_ollama_system_prompt() {
@@ -312,7 +325,7 @@ private:
         if (openai_api_key_.empty()) return std::nullopt;
 
         json body = {
-            {"model", openai_model_},
+            {"model", llm_model_},
             {"messages", json::array({
                 json{{"role", "system"}, {"content", system_prompt()}},
                 json{{"role", "user"}, {"content", prompt}}
@@ -326,6 +339,35 @@ private:
                 "Content-Type: application/json",
                 "Authorization: Bearer " + openai_api_key_
             }
+        );
+        if (!response) return std::nullopt;
+
+        try {
+            json parsed = json::parse(*response);
+            if (parsed.contains("usage")) {
+                total_tokens_used_ += parsed["usage"].value("total_tokens", 0);
+            }
+            return parsed["choices"][0]["message"]["content"].get<std::string>();
+        } catch (...) {}
+        return std::nullopt;
+    }
+
+    std::optional<std::string> call_cursor_bridge(const std::string& prompt) {
+        if (cursor_bridge_url_.empty()) return std::nullopt;
+
+        json body = {
+            {"model", llm_model_},
+            {"messages", json::array({
+                json{{"role", "system"}, {"content", system_prompt()}},
+                json{{"role", "user"}, {"content", prompt}}
+            })}
+        };
+
+        const auto response = http_post_json(
+            cursor_bridge_url_ + "/v1/chat/completions",
+            body,
+            {"Content-Type: application/json"},
+            300L
         );
         if (!response) return std::nullopt;
 
@@ -712,21 +754,21 @@ private:
                !state["enemies"].empty();
     }
 
-    std::optional<json> decide_minimal_fallback(const json& view, const json& actions) {
-        if (!view.contains("rival")) return std::nullopt;
+    std::optional<json> decide_minimal_fallback(const json& state, const json& actions) {
+        if (!has_actor(state)) return std::nullopt;
 
-        const json& pl = view["rival"];
-        const int ax = pl["x"].get<int>();
-        const int ay = pl["y"].get<int>();
-        const int ahp = pl["hp"].get<int>();
+        const json& actor = state[actor_state_key()];
+        const int ax = actor["x"].get<int>();
+        const int ay = actor["y"].get<int>();
+        const int ahp = actor["hp"].get<int>();
         if (ahp <= 0) {
             return json{{"tool", "get_game_state"}, {"arguments", json::object()}};
         }
 
-        const int max_hp = std::max(1, pl["max_hp"].get<int>());
+        const int max_hp = std::max(1, actor["max_hp"].get<int>());
         if (action_available(actions, "use_item") &&
             ahp * 100 < max_hp * 40 &&
-            agent::has_potion(view, agent_slot_)) {
+            agent::has_potion(state, agent_slot_)) {
             return json{{"tool", "use_item"}, {"arguments", {{"item_id", "potion"}}}};
         }
 
@@ -738,13 +780,14 @@ private:
 
         if (action_available(actions, "scout_around") &&
             !path_planner_.has_paths() &&
-            !has_enemies_in_state(view)) {
+            !has_enemies_in_state(state) &&
+            !actor_has_local_map_view(state)) {
             return json{{"tool", "scout_around"}, {"arguments", json::object()}};
         }
 
         if (action_available(actions, "move")) {
             sync_blocked_dirs_for_position(ax, ay);
-            if (auto rotated = pick_rotating_move(view, ax, ay)) return *rotated;
+            if (auto rotated = pick_rotating_move(state, ax, ay)) return *rotated;
         }
 
         return json{{"tool", "get_game_state"}, {"arguments", json::object()}};
@@ -808,19 +851,19 @@ private:
     }
 
     std::optional<std::string> call_mock(const json& state, const json& actions) {
-        if (!state.contains("rival")) {
+        if (!has_actor(state)) {
             return R"({"tool":"get_game_state","arguments":{}})";
         }
 
-        const json& pl = state["rival"];
-        const int ax = pl["x"].get<int>();
-        const int ay = pl["y"].get<int>();
-        const int ahp = pl["hp"].get<int>();
+        const json& actor = state[actor_state_key()];
+        const int ax = actor["x"].get<int>();
+        const int ay = actor["y"].get<int>();
+        const int ahp = actor["hp"].get<int>();
         if (ahp <= 0) {
             return R"({"tool":"get_game_state","arguments":{}})";
         }
 
-        const int max_hp = std::max(1, pl["max_hp"].get<int>());
+        const int max_hp = std::max(1, actor["max_hp"].get<int>());
 
         if (action_available(actions, "use_item") &&
             ahp * 100 < max_hp * 40 &&
@@ -842,7 +885,8 @@ private:
 
         if (action_available(actions, "scout_around") &&
             !path_planner_.has_paths() &&
-            !has_enemies_in_state(state)) {
+            !has_enemies_in_state(state) &&
+            !actor_has_local_map_view(state)) {
             return R"({"tool":"scout_around","arguments":{}})";
         }
 
@@ -898,23 +942,52 @@ private:
         if (tool == "get_visible_cells") {
             decision["tool"] = "scout_around";
             decision["arguments"] = json::object();
+            tool = "scout_around";
+        }
+
+        if (tool == "move") {
+            json& args = decision["arguments"];
+            if (decision.contains("to") && decision["to"].is_object()) {
+                if (!args.contains("x")) args["x"] = decision["to"].value("x", 0);
+                if (!args.contains("y")) args["y"] = decision["to"].value("y", 0);
+            }
+            for (const char* key : {"direction", "x", "y", "target_x", "target_y"}) {
+                if (decision.contains(key) && !args.contains(key)) {
+                    args[key] = decision[key];
+                }
+            }
+        } else if (tool == "attack") {
+            json& args = decision["arguments"];
+            if (decision.contains("target") && decision["target"].is_object()) {
+                if (!args.contains("target_x")) args["target_x"] = decision["target"].value("x", 0);
+                if (!args.contains("target_y")) args["target_y"] = decision["target"].value("y", 0);
+            }
+            for (const char* key : {"target_x", "target_y", "x", "y"}) {
+                if (decision.contains(key) && !args.contains(key)) {
+                    args[key] = decision[key];
+                }
+            }
         }
 
         return decision;
     }
 
-    void repair_move_decision(json& decision, const json& view) const {
+    void repair_move_decision(json& decision, const json& state) const {
         if (!decision.contains("tool") || decision["tool"] != "move") return;
         if (!decision.contains("arguments") || !decision["arguments"].is_object()) {
             decision["arguments"] = json::object();
         }
         json& args = decision["arguments"];
+        if (decision.contains("to") && decision["to"].is_object()) {
+            if (!args.contains("x")) args["x"] = decision["to"].value("x", 0);
+            if (!args.contains("y")) args["y"] = decision["to"].value("y", 0);
+        }
         const std::string dir = args.value("direction", "");
         if (!dir.empty() && dir_index(dir) >= 0) return;
-        if (!view.contains("rival")) return;
+        if (!has_actor(state)) return;
 
-        const int ax = view["rival"].value("x", 0);
-        const int ay = view["rival"].value("y", 0);
+        const int ax = state[actor_state_key()].value("x", 0);
+        const int ay = state[actor_state_key()].value("y", 0);
         if (args.contains("target_x") && args.contains("target_y")) {
             args["x"] = args["target_x"];
             args["y"] = args["target_y"];
@@ -974,6 +1047,15 @@ private:
             return decision;
         }
 
+        static const std::regex to_re(
+            "\"to\"\\s*:\\s*\\{\\s*\"x\"\\s*:\\s*(-?\\d+)\\s*,\\s*\"y\"\\s*:\\s*(-?\\d+)\\s*\\}");
+        std::smatch to_match;
+        if (std::regex_search(raw, to_match, to_re)) {
+            decision["arguments"]["x"] = std::stoi(to_match[1].str());
+            decision["arguments"]["y"] = std::stoi(to_match[2].str());
+            return decision;
+        }
+
         if (decision["tool"] == "scout_around" || decision["tool"] == "get_game_state") {
             return decision;
         }
@@ -1012,7 +1094,7 @@ private:
     }
 
     std::optional<json> decide_with_mock(const json& state, const json& actions) {
-        const auto raw = call_mock(remap_for_agent_logic(state), actions);
+        const auto raw = call_mock(state, actions);
         if (!raw) return std::nullopt;
         return parse_tool_decision(*raw);
     }
@@ -1034,17 +1116,17 @@ private:
 public:
     LLMClient(const std::string& provider,
               const std::string& ollama_url,
-              const std::string& ollama_model,
+              const std::string& llm_model,
               const std::string& openai_api_key,
-              const std::string& openai_model,
+              const std::string& cursor_bridge_url,
               double temperature,
               int max_predict_tokens,
               int ollama_num_gpu)
         : provider_(provider),
           ollama_url_(ollama_url),
-          ollama_model_(ollama_model),
+          llm_model_(llm_model),
           openai_api_key_(openai_api_key),
-          openai_model_(openai_model),
+          cursor_bridge_url_(cursor_bridge_url),
           temperature_(temperature),
           max_predict_tokens_(max_predict_tokens),
           ollama_num_gpu_(ollama_num_gpu),
@@ -1055,7 +1137,7 @@ public:
     void ping_ollama_keep_alive() {
         if (provider_ != "ollama") return;
         const json body = {
-            {"model", ollama_model_},
+            {"model", llm_model_},
             {"keep_alive", "24h"},
             {"stream", false},
             {"messages", json::array({
@@ -1083,10 +1165,30 @@ public:
         run_practice_turn();
     }
 
+    void wait_for_cursor_bridge() {
+        std::cout << "Waiting for Cursor bridge at " << cursor_bridge_url_ << "..." << std::endl;
+        for (int attempt = 0; attempt < 300; ++attempt) {
+            const auto response = http_get(cursor_bridge_url_ + "/health", 5L);
+            if (response && response->find("\"status\":\"ok\"") != std::string::npos) {
+                std::cout << "Cursor bridge ready." << std::endl;
+                return;
+            }
+            if (attempt % 10 == 0) {
+                std::cout << "Cursor bridge not ready yet..." << std::endl;
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        std::cerr << "Cursor bridge not ready after timeout." << std::endl;
+    }
+
     void wait_for_provider_ready(bool skip_practice_warmup = false) {
+        if (provider_ == "cursor") {
+            wait_for_cursor_bridge();
+            return;
+        }
         if (provider_ != "ollama") return;
 
-        std::cout << "Waiting for Ollama model " << ollama_model_ << "..." << std::endl;
+        std::cout << "Waiting for Ollama model " << llm_model_ << "..." << std::endl;
         bool pull_requested = false;
 
         for (int attempt = 0; attempt < 300; ++attempt) {
@@ -1104,14 +1206,14 @@ public:
                 request_ollama_pull();
                 pull_requested = true;
             } else if (attempt % 15 == 0) {
-                std::cout << "Still waiting for Ollama model " << ollama_model_
+                std::cout << "Still waiting for Ollama model " << llm_model_
                           << " (attempt " << attempt << ")..." << std::endl;
             }
 
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
 
-        std::cerr << "Ollama model " << ollama_model_
+        std::cerr << "Ollama model " << llm_model_
                   << " not ready after wait — will retry per step (no permanent mock fallback)."
                   << std::endl;
     }
@@ -1157,12 +1259,13 @@ public:
     const agent::PathPlanner& path_planner() const { return path_planner_; }
 
     void sync_path_planner(const json& state) {
-        if (!state.contains("rival")) return;
+        const std::string actor_key = actor_state_key();
+        if (!state.contains(actor_key)) return;
         const int sid = state.value("session_id", 0);
-        const int rx = state["rival"]["x"].get<int>();
-        const int ry = state["rival"]["y"].get<int>();
-        const int room_at = state.value("rival_room_index", -1);
-        path_planner_.on_position_update(rx, ry, sid, room_at);
+        const int ax = state[actor_key]["x"].get<int>();
+        const int ay = state[actor_key]["y"].get<int>();
+        const int room_at = state.value(actor_room_index_key(), -1);
+        path_planner_.on_position_update(ax, ay, sid, room_at);
     }
 
     void note_action_result(const std::string& tool,
@@ -1170,10 +1273,11 @@ public:
                             const json& result,
                             const json& state) {
         action_feedback_.clear();
-        if (!state.contains("rival")) return;
+        const std::string actor_key = actor_state_key();
+        if (!state.contains(actor_key)) return;
 
-        const int ax = state["rival"]["x"].get<int>();
-        const int ay = state["rival"]["y"].get<int>();
+        const int ax = state[actor_key]["x"].get<int>();
+        const int ay = state[actor_key]["y"].get<int>();
         sync_blocked_dirs_for_position(ax, ay);
         sync_fetch_counter_for_position(ax, ay);
 
@@ -1266,14 +1370,14 @@ public:
 
     json apply_stuck_guard(json decision, const json& state, const json& actions) {
         (void)actions;
-        if (!state.contains("rival")) return decision;
+        if (!has_actor(state)) return decision;
         if (!decision.contains("tool")) return decision;
 
         const std::string tool = decision["tool"].get<std::string>();
         if (tool != "move") return decision;
 
-        const int ax = state["rival"]["x"].get<int>();
-        const int ay = state["rival"]["y"].get<int>();
+        const int ax = state[actor_state_key()]["x"].get<int>();
+        const int ay = state[actor_state_key()]["y"].get<int>();
         const std::string dir = decision.value("arguments", json::object()).value("direction", "");
 
         if (dir.empty() || dir_index(dir) < 0) {
@@ -1303,7 +1407,7 @@ public:
     }
 
     json apply_path_guard(json decision, const json& state, const json& actions) {
-        if (!state.contains("rival") || !decision.contains("tool")) return decision;
+        if (!has_actor(state) || !decision.contains("tool")) return decision;
         if (!path_planner_.has_active_step()) return decision;
 
         const auto next_dir = path_planner_.next_direction();
@@ -1335,7 +1439,7 @@ public:
             consecutive_query_turns_ = 0;
         }
 
-        if (consecutive_query_turns_ >= 3 && is_query_tool(tool) && state.contains("rival")) {
+        if (consecutive_query_turns_ >= 3 && is_query_tool(tool) && has_actor(state)) {
             if (auto fallback = decide_minimal_fallback(state, actions)) return *fallback;
         }
 
@@ -1365,12 +1469,11 @@ public:
             std::cerr << "Token budget exceeded (" << total_tokens_used_
                       << "/" << max_total_tokens_ << ") — using minimal fallback"
                       << std::endl;
-            return decide_minimal_fallback(remap_for_agent_logic(state), actions);
+            return decide_minimal_fallback(state, actions);
         }
 
-        const json view = remap_for_agent_logic(state);
         ensure_session(state);
-        sync_path_planner(view);
+        sync_path_planner(state);
 
         const json path_info = path_planner_.summary_for_prompt();
         const std::string state_json = agent::compact_state_for_llm(state, agent_slot_);
@@ -1385,10 +1488,12 @@ public:
 
             if (provider_ == "ollama") {
                 raw = call_ollama(prompt);
+            } else if (provider_ == "cursor") {
+                raw = call_cursor_bridge(prompt);
             } else if (provider_ == "openai") {
                 raw = call_openai(prompt);
             } else {
-                raw = call_mock(view, actions);
+                raw = call_mock(state, actions);
             }
 
             if (provider_ == "ollama" && raw) {
@@ -1412,7 +1517,7 @@ public:
 
             try {
                 if (auto decision = parse_tool_decision(*raw)) {
-                    repair_move_decision(*decision, view);
+                    repair_move_decision(*decision, state);
                     const std::string tool = decision->value("tool", "");
                     if (!tool.empty() && !action_is_available(actions, tool)) {
                         std::cerr << "LLM chose unavailable '" << tool
@@ -1458,23 +1563,42 @@ public:
         if (provider_ != "mock") {
             std::cerr << "LLM decision unusable — using minimal fallback (provider stays "
                       << provider_ << ")" << std::endl;
-            return decide_minimal_fallback(view, actions);
+            return decide_minimal_fallback(state, actions);
         }
         return std::nullopt;
     }
 
     json agent_view(const json& state) const {
-        return remap_for_agent_logic(state);
+        return state;
     }
 
     static std::unique_ptr<LLMClient> from_env() {
-        const char* provider = std::getenv("LLM_PROVIDER");
+        const char* slot_env = std::getenv("AGENT_SLOT");
+        const std::string slot = slot_env ? slot_env : "rival";
+        const char* provider = agent::robot_env_or_fallback(slot, "LLM_PROVIDER");
         const std::string provider_name = provider ? provider : "mock";
 
-        const char* ollama_url = std::getenv("OLLAMA_URL");
-        const char* ollama_model = std::getenv("OLLAMA_MODEL");
+        const char* model = agent::robot_env_or_fallback(slot, "MODEL");
+        const char* cursor_bridge = agent::robot_env_or_fallback(slot, "CURSOR_BRIDGE_URL");
+        const std::string& label = agent::robot_meta(slot).label;
+        const std::string default_bridge = (label == "H")
+            ? "http://cursor-llm-bridge-h:8765"
+            : "http://cursor-llm-bridge-a:8765";
+        const std::string default_ollama_url = (label == "H")
+            ? "http://ollama-h:11435"
+            : "http://ollama-a:11434";
+        const std::string cursor_bridge_url =
+            provider_name == "cursor" ? (cursor_bridge ? cursor_bridge : default_bridge) : "";
+        const std::string llm_model = model ? model : "";
+
+        const char* ollama_url = agent::robot_env_or_fallback(slot, "OLLAMA_URL");
+        if (ollama_url == nullptr || ollama_url[0] == '\0') {
+            ollama_url = std::getenv("OLLAMA_URL");
+        }
+        const std::string resolved_ollama_url =
+            (ollama_url != nullptr && ollama_url[0] != '\0') ? ollama_url : default_ollama_url;
+
         const char* openai_key = std::getenv("OPENAI_API_KEY");
-        const char* openai_model = std::getenv("OPENAI_MODEL");
         const char* temperature = std::getenv("TEMPERATURE");
         const char* max_tokens = std::getenv("MAX_TOKENS");
 
@@ -1489,25 +1613,24 @@ public:
 
         auto client = std::make_unique<LLMClient>(
             provider_name,
-            ollama_url ? ollama_url : "http://ollama:11434",
-            ollama_model ? ollama_model : "qwen2.5:7b",
+            resolved_ollama_url,
+            llm_model,
             openai_key ? openai_key : "",
-            openai_model ? openai_model : "gpt-4o-mini",
+            cursor_bridge_url,
             temp,
             predict,
             num_gpu
         );
 
-        const char* slot = std::getenv("AGENT_SLOT");
         const char* max_total = std::getenv("MAX_TOTAL_TOKENS");
         client->set_agent_config(
-            slot ? slot : "rival",
+            slot,
             max_total ? std::stoi(max_total) : 50000);
         return client;
     }
 
     void set_agent_config(const std::string& slot, int max_total_tokens) {
-        agent_slot_ = (slot == "player") ? "player" : "rival";
+        agent_slot_ = agent::robot_meta(slot).slot;
         max_total_tokens_ = max_total_tokens;
     }
 

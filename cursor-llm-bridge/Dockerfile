@@ -9,16 +9,21 @@ COPY cursor-llm-bridge/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY cursor-llm-bridge/main.py ./
-COPY agent-runner/prompts/player_llm_prompt.txt /app/prompts/player_llm_prompt.txt
+COPY cursor-llm-bridge/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+COPY agent-runner/prompts/robot_llm_prompt.txt /app/prompts/robot_llm_prompt.txt
+RUN sed -e 's/{slot}/player/g' -e 's/{marker}/H/g' -e 's/{other_slot}/rival/g' -e 's/{other_marker}/A/g' \
+        /app/prompts/robot_llm_prompt.txt > /app/prompts/robot_H_llm_prompt.txt \
+    && sed -e 's/{slot}/rival/g' -e 's/{marker}/A/g' -e 's/{other_slot}/player/g' -e 's/{other_marker}/H/g' \
+        /app/prompts/robot_llm_prompt.txt > /app/prompts/robot_A_llm_prompt.txt
 
-ENV CURSOR_CWD=/workspace
+ENV ROBOT_H_CURSOR_CWD=/workspace
+ENV ROBOT_A_CURSOR_CWD=/workspace
 ENV PORT=8765
-ENV LLM_PROMPT_PATH=/app/prompts/player_llm_prompt.txt
-ENV HEALTH_PROBE_INTERVAL_SEC=90
 
 EXPOSE 8765
 
-HEALTHCHECK --interval=90s --timeout=30s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PORT}/health" | grep -q '"status":"ok"'
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8765"]
+ENTRYPOINT ["/entrypoint.sh"]

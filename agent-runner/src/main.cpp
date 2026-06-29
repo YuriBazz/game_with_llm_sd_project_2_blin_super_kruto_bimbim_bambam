@@ -81,19 +81,23 @@ int main() {
     const char* agent_slot_env = std::getenv("AGENT_SLOT");
     const std::string agent_slot = agent_slot_env ? agent_slot_env : "rival";
     const char* agent_label_env = std::getenv("AGENT_LABEL");
-    const std::string agent_label = agent_label_env ? agent_label_env : (agent_slot == "player" ? "H" : "A");
+    const agent::RobotSlotMeta& meta = agent::robot_meta(agent_slot);
+    const std::string agent_label = agent_label_env ? agent_label_env : meta.label;
 
     std::ofstream log_file;
     if (log_path) {
         log_file.open(log_path, std::ios::trunc);
     }
 
-    const char* provider_env = std::getenv("LLM_PROVIDER");
-    const char* model_env = std::getenv("OLLAMA_MODEL");
+    const std::string provider_key = agent::robot_env_key(agent_slot, "LLM_PROVIDER");
+    const std::string model_key = agent::robot_env_key(agent_slot, "MODEL");
+    const char* provider_env = agent::robot_env_or_fallback(agent_slot, "LLM_PROVIDER");
+    const char* model_env = agent::robot_env_or_fallback(agent_slot, "MODEL");
+    const std::string provider_name = provider_env ? provider_env : "mock";
     std::cout << "Agent runner starting (MCP mode, slot=" << agent_slot
               << ", label=" << agent_label << ")..." << std::endl;
-    std::cout << "LLM provider=" << (provider_env ? provider_env : "mock")
-              << " model=" << (model_env ? model_env : "(default)")
+    std::cout << "LLM env " << provider_key << "=" << provider_name
+              << " " << model_key << "=" << (model_env ? model_env : "(unset)")
               << std::endl;
     std::cout << "Max steps per round: " << max_steps << std::endl;
 
@@ -155,7 +159,7 @@ int main() {
 
                 json actions = mcp->call_tool("get_available_actions");
                 const auto action_list = actions.value("actions", json::array());
-                const std::string kills_key = agent_slot == "player" ? "player_kills" : "rival_kills";
+                const std::string kills_key = meta.kills_key;
                 std::cout << "Actions: " << action_list.dump()
                           << " | kills " << agent_label << "=" << state.value(kills_key, 0)
                           << "/" << state.value("kills_required", 0)

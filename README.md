@@ -78,7 +78,8 @@ MAX_TOTAL_TOKENS=50000
 |--------|-----|
 | Web UI | http://localhost:5173 |
 | game-service | http://localhost:8080 |
-| Ollama | http://localhost:11434 |
+| Ollama A | http://localhost:11434 |
+| Ollama H | http://localhost:11435 |
 
 ### Ручной прогон MCP (MCP Inspector / stdio)
 
@@ -132,6 +133,22 @@ flowchart TB
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `ROBOT_A_LLM_PROVIDER` | — | LLM для робота A: `ollama`, `openai`, `cursor` |
+| `ROBOT_A_LLM_PROVIDER_FALLBACK` | `ollama` | Fallback провайдера A |
+| `ROBOT_A_MODEL` | — | Имя модели для A (зависит от провайдера: `qwen2.5:3b`, `gpt-4o-mini`, `composer-2.5`, …) |
+| `ROBOT_A_MODEL_FALLBACK` | — | Fallback модели A |
+| `ROBOT_A_CURSOR_BRIDGE_URL` | `http://cursor-llm-bridge-a:8765` | URL bridge внутри compose |
+| `ROBOT_H_LLM_PROVIDER` | — | LLM для робота H: `ollama`, `openai`, `cursor` |
+| `ROBOT_H_LLM_PROVIDER_FALLBACK` | `ollama` | Fallback провайдера H |
+| `ROBOT_H_MODEL` | — | Имя модели для H |
+| `ROBOT_H_MODEL_FALLBACK` | — | Fallback модели H |
+| `ROBOT_H_CURSOR_BRIDGE_URL` | `http://cursor-llm-bridge-h:8765` | URL bridge внутри compose |
+| `CURSOR_API_KEY` | — | Общий ключ Cursor API (нужен, если хотя бы один робот с `LLM_PROVIDER=cursor`) |
+| `ROBOT_A_OLLAMA_URL` | `http://ollama-a:11434` | Ollama для робота A |
+| `ROBOT_H_OLLAMA_URL` | `http://ollama-h:11435` | Ollama для робота H |
+| `OLLAMA_URL` | — | Legacy fallback только для A |
+| `OLLAMA_NUM_GPU` | — | `0` = CPU-only при проблемах с GPU |
+| `OPENAI_API_KEY` | — | Ключ OpenAI (если провайдер `openai`) |
 | `LLM_PROVIDER` | `ollama` | Провайдер робота **A** (rival): `mock`, `ollama`, `openai`, `cursor` |
 | `LLM_PROVIDER_PLAYER` | `ollama` | Провайдер робота **H** (player); для Cursor: `cursor` + `cursor-llm-bridge` |
 | `OLLAMA_URL` | `http://ollama:11434` | Endpoint Ollama |
@@ -159,6 +176,32 @@ AMD iGPU / NVIDIA — см. `docker-compose.nvidia.yml` и комментари�
 
 Контракт: [`mcp-contract.md`](mcp-contract.md). При невалидных аргументах — `{"success": false, "error": "..."}`.
 
+`ROBOT_A_*` и `ROBOT_H_*` задают LLM **независимо** для каждого робота:
+
+| `ROBOT_*_LLM_PROVIDER` | Кто отвечает за LLM |
+|------------------------|---------------------|
+| `ollama` | `agent-runner` → Ollama |
+| `openai` | `agent-runner` → OpenAI API |
+| `cursor` | `agent-runner` → `cursor-llm-bridge-{a\|h}` (нужен `CURSOR_API_KEY`) |
+
+```bash
+ROBOT_A_LLM_PROVIDER=ollama ROBOT_H_LLM_PROVIDER=ollama ./scripts/compose-up.sh
+ROBOT_A_LLM_PROVIDER=openai ROBOT_H_LLM_PROVIDER=openai ./scripts/compose-up.sh
+ROBOT_H_LLM_PROVIDER=cursor CURSOR_API_KEY=... ./scripts/compose-up.sh
+ROBOT_A_LLM_PROVIDER=cursor ROBOT_H_LLM_PROVIDER=cursor CURSOR_API_KEY=... ./scripts/compose-up.sh
+```
+
+Bridge стартует **только** для роботов с `ROBOT_*_LLM_PROVIDER=cursor` и при непустом `CURSOR_API_KEY`. Два контейнера Ollama (`ollama-a`, `ollama-h`) стартуют всегда. `ollama-a` качает `ROBOT_A_MODEL`, `ollama-h` — `ROBOT_H_MODEL`. A ходит в `ollama-a`, H — в `ollama-h` (или меняешь `ROBOT_*_OLLAMA_URL`).
+
+Для каждого `ROBOT_{A|H}_*` есть парный `ROBOT_{A|H}_*_FALLBACK` — используется, если основная переменная не задана. Пример `.env`:
+
+```env
+ROBOT_A_LLM_PROVIDER_FALLBACK=ollama
+ROBOT_A_MODEL_FALLBACK=qwen2.5:3b
+ROBOT_H_LLM_PROVIDER_FALLBACK=cursor
+ROBOT_H_MODEL_FALLBACK=composer-2.5
+CURSOR_API_KEY=
+```
 | MCP tool | REST |
 |----------|------|
 | `get_game_state` | `GET /api/state` |
@@ -210,6 +253,12 @@ LLM_PROVIDER=cursor ./scripts/compose-up.sh    # cursor-llm-bridge → Composer 
 
 **Главный вывод:** mock **не проходит** kill race — ходит по кругу (right→down→left→up) до лимита шагов, 0 kills. Реально выигрывает ollama/qwen на rival (A); **cursor/Composer на H** в live-логе набрал 3/4 kills за 59 шагов — лучше ollama-H (0/4 на seed 42).
 
+| Компонент | AI / ручная правка |
+|-----------|-------------------|
+| MCP server boilerplate, web-client scaffold | Сгенерировано AI, доработано вручную |
+| game logic, agent loop, Docker wiring | В основном вручную |
+| audit reports (`report2.md`, `report3.md`), eval script | AI-assisted |
+`ROBOT_A_LLM_PROVIDER` / `ROBOT_H_LLM_PROVIDER` (или `*_FALLBACK`) в agent-runner; класс `FakeLLM` в `examples/enemy_llm_agent.py`
 ```bash
 chmod +x eval/run_eval.sh
 ./eval/run_eval.sh 5              # mock × player + mock × rival

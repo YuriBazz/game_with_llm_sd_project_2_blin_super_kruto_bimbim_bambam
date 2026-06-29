@@ -1,6 +1,7 @@
 """OpenAI-compatible /v1/chat/completions bridge to Cursor Composer via cursor-sdk."""
 
 import os
+import sys
 import threading
 import time
 import uuid
@@ -9,14 +10,48 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+
+def _robot_label() -> str:
+    label = os.environ.get("ROBOT_LABEL", "").strip().upper()
+    if label not in {"A", "H"}:
+        print(
+            "ERROR: ROBOT_LABEL must be A or H; cursor-llm-bridge will not start.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return label
+
+
+def _robot_env(label: str, suffix: str, default: str = "") -> str:
+    return os.environ.get(f"ROBOT_{label}_{suffix}", default)
+
+
+def _require_cursor_api_key() -> str:
+    key = os.environ.get("CURSOR_API_KEY", "").strip()
+    if not key:
+        print(
+            "ERROR: CURSOR_API_KEY is required; cursor-llm-bridge will not start.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return key
+
+
+ROBOT_LABEL = _robot_label()
+CURSOR_API_KEY = _require_cursor_api_key()
+
 app = FastAPI(title="cursor-llm-bridge", version="1.0.0")
 
-CURSOR_CWD = os.environ.get("CURSOR_CWD", "/workspace")
-DEFAULT_MODEL = os.environ.get("CURSOR_MODEL", "composer-2.5")
-MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "5000"))
-MAX_TOTAL_TOKENS = int(os.environ.get("MAX_TOTAL_TOKENS", "50000"))
-HEALTH_PROBE_INTERVAL_SEC = int(os.environ.get("HEALTH_PROBE_INTERVAL_SEC", "90"))
-LLM_PROMPT_PATH = os.environ.get("LLM_PROMPT_PATH", "/app/llm_prompt.txt")
+ROBOT_CURSOR_CWD = _robot_env(ROBOT_LABEL, "CURSOR_CWD", "/workspace")
+DEFAULT_MODEL = _robot_env(ROBOT_LABEL, "MODEL", "")
+MAX_TOKENS = int(_robot_env(ROBOT_LABEL, "MAX_TOKENS", "5000"))
+MAX_TOTAL_TOKENS = int(_robot_env(ROBOT_LABEL, "MAX_TOTAL_TOKENS", "50000"))
+HEALTH_PROBE_INTERVAL_SEC = int(_robot_env(ROBOT_LABEL, "HEALTH_PROBE_INTERVAL_SEC", "0"))
+ROBOT_LLM_PROMPT_PATH = _robot_env(
+    ROBOT_LABEL,
+    "LLM_PROMPT_PATH",
+    f"/app/prompts/robot_{ROBOT_LABEL}_llm_prompt.txt",
+)
 
 _token_lock = threading.Lock()
 _total_tokens_used = 0
@@ -47,7 +82,7 @@ def _load_llm_prompt() -> str:
     if _llm_prompt_cache is not None:
         return _llm_prompt_cache
     try:
-        with open(LLM_PROMPT_PATH, encoding="utf-8") as handle:
+        with open(ROBOT_LLM_PROMPT_PATH, encoding="utf-8") as handle:
             _llm_prompt_cache = handle.read().strip()
     except OSError:
         _llm_prompt_cache = ""
@@ -126,10 +161,6 @@ def _extract_text(result: Any) -> str:
 
 
 def _run_cursor_prompt(full_prompt: str, model: str) -> str:
-    api_key = os.environ.get("CURSOR_API_KEY", "").strip()
-    if not api_key:
-        raise HTTPException(status_code=503, detail="CURSOR_API_KEY is not set")
-
     try:
         from cursor_sdk import Agent, AgentOptions, LocalAgentOptions
     except ImportError as exc:
@@ -139,10 +170,10 @@ def _run_cursor_prompt(full_prompt: str, model: str) -> str:
         result = Agent.prompt(
             full_prompt,
             AgentOptions(
-                api_key=api_key,
+                api_key=CURSOR_API_KEY,
                 model=model or DEFAULT_MODEL,
-                local=LocalAgentOptions(cwd=CURSOR_CWD),
-                mode="plan",
+                local=LocalAgentOptions(cwd=ROBOT_CURSOR_CWD),
+                mode="ask",
             ),
         )
     except Exception as exc:
@@ -160,6 +191,9 @@ def _run_cursor_prompt(full_prompt: str, model: str) -> str:
 
 def _maybe_run_health_probe() -> dict[str, Any]:
     global _last_health_probe_at
+
+    if HEALTH_PROBE_INTERVAL_SEC <= 0:
+        return {"probe": "disabled"}
 
     now = time.time()
     with _token_lock:
@@ -193,14 +227,12 @@ def _maybe_run_health_probe() -> dict[str, Any]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    key = os.environ.get("CURSOR_API_KEY", "")
     budget = _token_budget_status()
-    if not key:
-        return {"status": "missing_api_key", **budget}
 
     if budget["tokens_used"] >= MAX_TOTAL_TOKENS:
         return {
             "status": "token_budget_exceeded",
+            "robot_label": ROBOT_LABEL,
             "model_default": DEFAULT_MODEL,
             **budget,
         }
@@ -211,15 +243,23 @@ def health() -> dict[str, Any]:
         if exc.status_code == 429:
             return {
                 "status": "token_budget_exceeded",
+                "robot_label": ROBOT_LABEL,
                 "model_default": DEFAULT_MODEL,
                 **budget,
                 "detail": exc.detail,
             }
-        raise
+        return {
+            "status": "degraded",
+            "robot_label": ROBOT_LABEL,
+            "model_default": DEFAULT_MODEL,
+            **budget,
+            "health_probe": {"probe": "failed", "detail": exc.detail},
+        }
 
-    status = "ok" if probe.get("probe") in {"ok", "skipped"} else "degraded"
+    status = "ok" if probe.get("probe") in {"ok", "skipped", "disabled"} else "degraded"
     return {
         "status": status,
+        "robot_label": ROBOT_LABEL,
         "model_default": DEFAULT_MODEL,
         **budget,
         "health_probe": probe,
@@ -231,7 +271,7 @@ def list_models() -> dict[str, Any]:
     return {
         "object": "list",
         "data": [
-            {"id": "composer-2.5", "object": "model"},
+            {"id": DEFAULT_MODEL, "object": "model"},
         ],
     }
 
@@ -246,7 +286,6 @@ def chat_completions(body: ChatCompletionsRequest) -> dict[str, Any]:
     completion_cap = body.max_tokens if body.max_tokens is not None else MAX_TOKENS
     completion_cap = max(1, min(completion_cap, MAX_TOKENS))
 
-    # Game robot: JSON-only replies, no repo edits.
     full_prompt = (
         "You are a game AI controller. Reply with ONLY the JSON object requested "
         "in the user message. Do not edit files, run shell commands, or echo game state.\n\n"

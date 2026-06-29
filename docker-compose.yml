@@ -33,21 +33,19 @@ services:
     depends_on:
       game-service:
         condition: service_healthy
-      ollama:
-        condition: service_started
     restart: unless-stopped
     environment:
       - AGENT_SLOT=rival
       - AGENT_LABEL=A
-      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - ROBOT_A_LLM_PROVIDER=${ROBOT_A_LLM_PROVIDER:-${ROBOT_A_LLM_PROVIDER_FALLBACK:-ollama}}
       - MCP_SERVER_PATH=/usr/local/bin/mcp_server
       - GAME_SERVICE_HOST=game-service
       - GAME_SERVICE_PORT=8080
-      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - ROBOT_A_OLLAMA_URL=${ROBOT_A_OLLAMA_URL:-${OLLAMA_URL:-http://ollama-a:11434}}
+      - ROBOT_A_MODEL=${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-}}
       - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - ROBOT_A_CURSOR_BRIDGE_URL=${ROBOT_A_CURSOR_BRIDGE_URL:-http://cursor-llm-bridge-a:8765}
       - MAX_STEPS=${MAX_STEPS:-500}
       - MAX_TOKENS=${MAX_TOKENS:-5000}
       - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-50000}
@@ -65,21 +63,19 @@ services:
     depends_on:
       game-service:
         condition: service_healthy
-      ollama:
-        condition: service_started
     restart: unless-stopped
     environment:
       - AGENT_SLOT=player
       - AGENT_LABEL=H
-      - LLM_PROVIDER=${LLM_PROVIDER_PLAYER:-ollama}
+      - ROBOT_H_LLM_PROVIDER=${ROBOT_H_LLM_PROVIDER:-${ROBOT_H_LLM_PROVIDER_FALLBACK:-ollama}}
       - MCP_SERVER_PATH=/usr/local/bin/mcp_server
       - GAME_SERVICE_HOST=game-service
       - GAME_SERVICE_PORT=8080
-      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL_PLAYER:-qwen2.5:3b}
+      - ROBOT_H_OLLAMA_URL=${ROBOT_H_OLLAMA_URL:-http://ollama-h:11435}
+      - ROBOT_H_MODEL=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}}
       - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL_PLAYER:-gpt-4o-mini}
+      - ROBOT_H_CURSOR_BRIDGE_URL=${ROBOT_H_CURSOR_BRIDGE_URL:-http://cursor-llm-bridge-h:8765}
       - MAX_STEPS=${MAX_STEPS:-500}
       - MAX_TOKENS=${MAX_TOKENS:-5000}
       - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-50000}
@@ -100,35 +96,108 @@ services:
     networks:
       - game-net
 
-  ollama:
+  cursor-llm-bridge-h:
+    profiles:
+      - cursor-h
+    build:
+      context: .
+      dockerfile: cursor-llm-bridge/Dockerfile
+    ports:
+      - "8765:8765"
+    environment:
+      - ROBOT_LABEL=H
+      - CURSOR_API_KEY=${CURSOR_API_KEY:-}
+      - ROBOT_H_CURSOR_CWD=/workspace
+      - ROBOT_H_MODEL=${ROBOT_H_MODEL:-${ROBOT_H_MODEL_FALLBACK:-}}
+      - ROBOT_H_MAX_TOKENS=${ROBOT_H_MAX_TOKENS:-5000}
+      - ROBOT_H_MAX_TOTAL_TOKENS=${ROBOT_H_MAX_TOTAL_TOKENS:-50000}
+      - ROBOT_H_HEALTH_PROBE_INTERVAL_SEC=${ROBOT_H_HEALTH_PROBE_INTERVAL_SEC:-0}
+      - ROBOT_H_LLM_PROMPT_PATH=/app/prompts/robot_H_llm_prompt.txt
+    volumes:
+      - .:/workspace:ro
+    networks:
+      - game-net
+    restart: "no"
+
+  cursor-llm-bridge-a:
+    profiles:
+      - cursor-a
+    build:
+      context: .
+      dockerfile: cursor-llm-bridge/Dockerfile
+    ports:
+      - "8766:8765"
+    environment:
+      - ROBOT_LABEL=A
+      - CURSOR_API_KEY=${CURSOR_API_KEY:-}
+      - ROBOT_A_CURSOR_CWD=/workspace
+      - ROBOT_A_MODEL=${ROBOT_A_MODEL:-${ROBOT_A_MODEL_FALLBACK:-}}
+      - ROBOT_A_MAX_TOKENS=${ROBOT_A_MAX_TOKENS:-5000}
+      - ROBOT_A_MAX_TOTAL_TOKENS=${ROBOT_A_MAX_TOTAL_TOKENS:-50000}
+      - ROBOT_A_HEALTH_PROBE_INTERVAL_SEC=${ROBOT_A_HEALTH_PROBE_INTERVAL_SEC:-0}
+      - ROBOT_A_LLM_PROMPT_PATH=/app/prompts/robot_A_llm_prompt.txt
+    volumes:
+      - .:/workspace:ro
+    networks:
+      - game-net
+    restart: "no"
+
+  ollama-a:
+    profiles:
+      - ollama
     image: ollama/ollama:latest
     restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
-      - ollama_data:/root/.ollama
-    devices:
-      - /dev/dxg:/dev/dxg
-    group_add:
-      - ${RENDER_GID:-989}
-      - ${VIDEO_GID:-985}
+      - ollama_a_data:/root/.ollama
+      - ./scripts/ollama-serve.sh:/ollama-entrypoint.sh:ro
     environment:
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
-      - OLLAMA_MODEL_PLAYER=${OLLAMA_MODEL_PLAYER:-llama3.2:1b}
       - OLLAMA_KEEP_ALIVE=-1
-      - OLLAMA_VULKAN=${OLLAMA_VULKAN:-1}
-      - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-1}
+      - OLLAMA_VULKAN=${OLLAMA_VULKAN:-0}
+      - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-0}
       - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-0}
-      # AMD Renoir/Lucienne iGPU (gfx1030) — drop if you have NVIDIA + nvidia-container-toolkit
-      - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
-    entrypoint: /bin/sh
-    command: -c "ollama serve & sleep 5 && ollama pull \"$$OLLAMA_MODEL\" && ollama pull \"$$OLLAMA_MODEL_PLAYER\" && tail -f /dev/null"
+      - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-}
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    entrypoint: ["/bin/sh", "/ollama-entrypoint.sh"]
     healthcheck:
       test: ["CMD", "ollama", "ps"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 300s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - game-net
+
+  ollama-h:
+    profiles:
+      - ollama
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11435:11435"
+    volumes:
+      - ollama_h_data:/root/.ollama
+      - ./scripts/ollama-serve.sh:/ollama-entrypoint.sh:ro
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11435
+      - OLLAMA_KEEP_ALIVE=-1
+      - OLLAMA_VULKAN=${OLLAMA_VULKAN:-0}
+      - OLLAMA_IGPU_ENABLE=${OLLAMA_IGPU_ENABLE:-0}
+      - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-0}
+      - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-}
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    entrypoint: ["/bin/sh", "/ollama-entrypoint.sh"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "OLLAMA_HOST=127.0.0.1:11435 ollama ps"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     networks:
       - game-net
 
@@ -137,5 +206,6 @@ networks:
     driver: bridge
 
 volumes:
-  ollama_data:
+  ollama_a_data:
+  ollama_h_data:
   agent_logs:
